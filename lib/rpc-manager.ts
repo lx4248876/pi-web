@@ -1,14 +1,15 @@
-import { randomUUID } from "node:crypto";
-import { createAgentSession, defineTool, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import {randomUUID} from "node:crypto";
 import type {
   ExtensionUIContext,
   ExtensionUIDialogOptions,
   RpcExtensionUIResponse,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { cacheSessionPath } from "./session-reader";
-import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import {createAgentSession, defineTool, SessionManager, Theme} from "@earendil-works/pi-coding-agent";
+import {Type} from "typebox";
+import {cacheSessionPath} from "./session-reader";
+import type {AgentSessionLike, ToolInfo} from "./pi-types";
+import {composeActiveTools} from "./tool-composition";
 
 // ============================================================================
 // Loop Detection Constants
@@ -38,8 +39,6 @@ type PendingExtensionRequest = {
   reject: (error: unknown) => void;
 };
 
-const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-const COMPAT_UI_TOOL_NAMES = ["AskUserQuestion", "request_user_input"];
 const RPC_THEME = new Theme(
   {
     accent: "#38bdf8",
@@ -99,11 +98,6 @@ const RPC_THEME = new Theme(
   "truecolor",
   { name: "pi-web-rpc" },
 );
-
-function withCompatUiTools(toolNames: string[]): string[] {
-  if (toolNames.length === 0) return [];
-  return Array.from(new Set([...toolNames, ...COMPAT_UI_TOOL_NAMES]));
-}
 
 function textResult(text: string) {
   return { content: [{ type: "text" as const, text }], details: undefined };
@@ -728,7 +722,11 @@ export class AgentSessionWrapper {
       }
 
       case "set_tools": {
-        this.inner.setActiveToolsByName(withCompatUiTools(command.toolNames as string[]));
+          // composeActiveTools keeps extension tools active for any non-empty
+          // preset and returns [] for the "Off" preset (everything truly off),
+          // matching the behaviour at session start.
+          const requested = command.toolNames as string[];
+          this.inner.setActiveToolsByName(composeActiveTools(requested, this.inner.getAllTools()));
         return null;
       }
 
@@ -814,11 +812,14 @@ export async function startRpcSession(
       : SessionManager.create(cwd, undefined);
 
     // Determine which tools to pass based on requested toolNames.
-    // Since v0.68.0, createAgentSession expects string[] tool names instead of Tool[] instances.
-    // Pass all built-in coding tool names by default; for "all off", pass empty array.
+      // Only the "all off" preset needs an explicit allowlist (`tools: []`), which
+      // disables every tool including extensions. For any non-empty preset we OMIT
+      // `tools` so the SDK uses its default: built-in tools enabled AND extension
+      // tools (e.g. subagent, installed via `pi install`) kept available.
+      // Passing an allowlist here is what previously filtered out extension tools.
     let toolsOption: string[] | undefined;
-    if (toolNames !== undefined) {
-      toolsOption = toolNames.length === 0 ? [] : withCompatUiTools(CODING_TOOL_NAMES);
+      if (toolNames !== undefined && toolNames.length === 0) {
+          toolsOption = [];
     }
 
     const { session: inner } = await createAgentSession({
@@ -829,9 +830,11 @@ export async function startRpcSession(
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
     });
 
-    // If specific tool names were requested (non-empty), narrow active tools now
+      // For a non-empty preset, narrow the *built-in* tools to the requested set
+      // while keeping all extension tools active (discovered from the live
+      // registry, so newly installed packages are picked up automatically).
     if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(withCompatUiTools(toolNames));
+        inner.setActiveToolsByName(composeActiveTools(toolNames, inner.getAllTools()));
     }
 
     // When all tools are disabled, clear the system prompt entirely.

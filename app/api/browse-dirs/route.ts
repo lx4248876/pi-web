@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
-import { existsSync, readdirSync, statSync } from "fs";
-import { join, basename } from "path";
-import { homedir } from "os";
+import {NextResponse} from "next/server";
+import {existsSync, readdirSync, statSync} from "fs";
+import {basename, join} from "path";
+import {homedir} from "os";
 
 export const dynamic = "force-dynamic";
 
@@ -145,7 +145,7 @@ function listDir(dirPath: string): DirEntry[] {
   try {
     const names = readdirSync(dirPath, { withFileTypes: true });
     return names
-      .filter((d) => d.isDirectory() && !SKIP_DIRS.has(d.name) && !d.name.startsWith("."))
+        .filter((d) => d.isDirectory() && !SKIP_DIRS.has(d.name))
       .map((d) => ({
         name: d.name,
         path: join(dirPath, d.name),

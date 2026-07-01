@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getFileIcon, FolderIcon } from "./FileIcons";
-import { PremiumDiffViewer } from "./PremiumDiffViewer";
+import React, {useCallback, useEffect, useMemo, useState} from "react";
+import {FolderIcon, getFileIcon} from "./FileIcons";
+import {PremiumDiffViewer} from "./PremiumDiffViewer";
 
 interface Props { cwd: string; }
 
@@ -240,7 +240,11 @@ export function GitPanel({ cwd }: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "获取分支列表失败");
       setLocalBranches(data.local || []); setRemoteBranches(data.remote || []);
-    } catch { /* quiet */ }
+    } catch {
+        // 当前目录不是 git 仓库 / 拉取失败时必须清空，避免残留上一个项目的分支列表
+        setLocalBranches([]);
+        setRemoteBranches([]);
+    }
     finally { setBranchLoading(false); }
   }, [cwd]);
 

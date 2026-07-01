@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { selectCwdWithValidation, type BrowseValidationResponse } from "@/lib/cwd-selection";
-import { pickSessionForCwd } from "@/lib/project-session-restore";
-import { buildRecentCwdOptions, removeStoredRecentCwd } from "@/lib/recent-cwds";
-import type { SessionInfo } from "@/lib/types";
-import { FileExplorer } from "./FileExplorer";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {type BrowseValidationResponse, selectCwdWithValidation} from "@/lib/cwd-selection";
+import {pickSessionForCwd} from "@/lib/project-session-restore";
+import {buildRecentCwdOptions, removeStoredRecentCwd} from "@/lib/recent-cwds";
+import type {SessionInfo} from "@/lib/types";
+import {FileExplorer} from "./FileExplorer";
 
 interface Props {
   selectedSessionId: string | null;
@@ -510,14 +510,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [loadBrowseEntries, selectedCwd, selectedCwdProp]);
 
 
-  const handleNewSession = useCallback(() => {
-    const targetCwd = selectedCwdProp ?? selectedCwd;
-    if (!targetCwd) return;
+    const handleNewSessionFor = useCallback((cwd: string) => {
+        if (!cwd) return;
     const tempId = typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    onNewSession?.(tempId, targetCwd);
-  }, [selectedCwd, selectedCwdProp, onNewSession]);
+        onNewSession?.(tempId, cwd);
+    }, [onNewSession]);
 
   const recentCwdOptions = buildRecentCwdOptions(getRecentCwds(allSessions), storedRecentCwds, RECENT_CWDS_LIMIT);
   const browseParentPath = browsePath ? getParentPath(browsePath) : null;
@@ -602,45 +601,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <PiAgentTitle />
           <div style={{ display: "flex", gap: 6 }}>
-            {/* New Session Button */}
-            <button
-              onClick={handleNewSession}
-              disabled={!(selectedCwdProp ?? selectedCwd)}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                background: "var(--bg-hover)",
-                border: "1px solid var(--border)",
-                color: (selectedCwdProp ?? selectedCwd) ? "var(--text-muted)" : "var(--text-dim)",
-                cursor: (selectedCwdProp ?? selectedCwd) ? "pointer" : "not-allowed",
-                height: 32,
-                paddingLeft: 10,
-                paddingRight: 12,
-                borderRadius: 7,
-                fontSize: 12,
-                fontWeight: 500,
-                letterSpacing: "-0.01em",
-                flexShrink: 0,
-                transition: "background 0.12s, color 0.12s, border-color 0.12s",
-              }}
-              title={(selectedCwdProp ?? selectedCwd) ? `New session in ${shortenCwd(selectedCwdProp ?? selectedCwd!, homeDir)}` : "Select a project first"}
-              onMouseEnter={(e) => {
-                if (!(selectedCwdProp ?? selectedCwd)) return;
-                e.currentTarget.style.background = "var(--bg-selected)";
-                e.currentTarget.style.color = "var(--accent)";
-                e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = (selectedCwdProp ?? selectedCwd) ? "var(--text-muted)" : "var(--text-dim)";
-                e.currentTarget.style.borderColor = "var(--border)";
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                <line x1="6" y1="1" x2="6" y2="11" />
-                <line x1="1" y1="6" x2="11" y2="6" />
-              </svg>
-              New
-            </button>
             {/* Refresh Sessions Button */}
             <button
               onClick={() => loadSessions(false)}
@@ -1148,21 +1108,72 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   </span>
                 </div>
 
-                {/* Hide Workspace action */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    hideProjectCwd(cwd);
-                  }}
-                  title="Hide this project from workspace"
-                  style={{
-                    background: "none", border: "none", width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", cursor: "pointer", borderRadius: 3
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "#f87171"; e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
-                >
-                  ×
-                </button>
+                  {/* Row actions: New session in this project + hide workspace */}
+                  <div style={{display: "flex", alignItems: "center", gap: 2, flexShrink: 0}}>
+                      <button
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              handleNewSessionFor(cwd);
+                          }}
+                          title={`New session in ${cwd}`}
+                          style={{
+                              background: "none",
+                              border: "none",
+                              width: 18,
+                              height: 18,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "var(--text-dim)",
+                              cursor: "pointer",
+                              borderRadius: 3,
+                              padding: 0,
+                          }}
+                          onMouseEnter={(e) => {
+                              e.currentTarget.style.color = "var(--accent)";
+                              e.currentTarget.style.background = "rgba(37,99,235,0.10)";
+                          }}
+                          onMouseLeave={(e) => {
+                              e.currentTarget.style.color = "var(--text-dim)";
+                              e.currentTarget.style.background = "none";
+                          }}
+                      >
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor"
+                               strokeWidth="2.2" strokeLinecap="round">
+                              <line x1="6" y1="1.5" x2="6" y2="10.5"/>
+                              <line x1="1.5" y1="6" x2="10.5" y2="6"/>
+                          </svg>
+                      </button>
+                      <button
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              hideProjectCwd(cwd);
+                          }}
+                          title="Hide this project from workspace"
+                          style={{
+                              background: "none",
+                              border: "none",
+                              width: 16,
+                              height: 16,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "var(--text-dim)",
+                              cursor: "pointer",
+                              borderRadius: 3
+                          }}
+                          onMouseEnter={(e) => {
+                              e.currentTarget.style.color = "#f87171";
+                              e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)";
+                          }}
+                          onMouseLeave={(e) => {
+                              e.currentTarget.style.color = "var(--text-dim)";
+                              e.currentTarget.style.background = "none";
+                          }}
+                      >
+                          ×
+                      </button>
+                  </div>
               </div>
 
               {/* Collapsible sessions tree children box */}
