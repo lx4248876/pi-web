@@ -5,7 +5,7 @@ import type { AgentMessage, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
-import { useAgentSession, type AgentPhase } from "@/hooks/useAgentSession";
+import { useAgentSession, type AgentPhase, type ExtensionUIRequest, type ExtensionUIResponse } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 
@@ -90,6 +90,142 @@ function Typewriter({ phrases }: { phrases: string[] }) {
   );
 }
 
+function ExtensionUIDialog({
+  request,
+  onResponse,
+}: {
+  request: Extract<ExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }>;
+  onResponse: (response: ExtensionUIResponse) => void;
+}) {
+  const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
+
+  useEffect(() => {
+    setValue(request.method === "editor" ? request.prefill ?? "" : "");
+  }, [request.id, request.method, request.method === "editor" ? request.prefill : undefined]);
+
+  const cancel = () => onResponse({ type: "extension_ui_response", id: request.id, cancelled: true });
+  const submitValue = () => onResponse({ type: "extension_ui_response", id: request.id, value });
+
+  return (
+    <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/25 px-4 backdrop-blur-[2px]">
+      <div
+        className="w-full max-w-[460px]"
+        style={{
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          boxShadow: "0 18px 50px rgba(0,0,0,0.22)",
+          padding: 16,
+        }}
+      >
+        <div className="mb-3 text-[15px] font-semibold text-text">{request.title}</div>
+
+        {request.method === "select" && (
+          <div className="flex flex-col gap-2">
+            {request.options.map((option) => (
+              <button
+                key={option}
+                onClick={() => onResponse({ type: "extension_ui_response", id: request.id, value: option })}
+                className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-panel)]"
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  padding: "9px 10px",
+                  color: "var(--text)",
+                }}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {request.method === "confirm" && (
+          <div className="text-sm leading-6 text-text-muted">{request.message}</div>
+        )}
+
+        {request.method === "input" && (
+          <input
+            autoFocus
+            value={value}
+            placeholder={request.placeholder}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitValue();
+              if (e.key === "Escape") cancel();
+            }}
+            className="w-full text-sm outline-none"
+            style={{
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              color: "var(--text)",
+              padding: "9px 10px",
+            }}
+          />
+        )}
+
+        {request.method === "editor" && (
+          <textarea
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") cancel();
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") submitValue();
+            }}
+            rows={8}
+            className="w-full resize-none text-sm outline-none"
+            style={{
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              color: "var(--text)",
+              padding: "9px 10px",
+            }}
+          />
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={cancel}
+            className="text-sm transition-colors hover:bg-[var(--bg-panel)]"
+            style={{ border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", padding: "7px 12px" }}
+          >
+            Cancel
+          </button>
+          {request.method === "confirm" ? (
+            <>
+              <button
+                onClick={() => onResponse({ type: "extension_ui_response", id: request.id, confirmed: false })}
+                className="text-sm transition-colors hover:bg-[var(--bg-panel)]"
+                style={{ border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)", padding: "7px 12px" }}
+              >
+                No
+              </button>
+              <button
+                onClick={() => onResponse({ type: "extension_ui_response", id: request.id, confirmed: true })}
+                className="text-sm"
+                style={{ border: "1px solid var(--accent)", borderRadius: 6, background: "var(--accent)", color: "white", padding: "7px 12px" }}
+              >
+                Yes
+              </button>
+            </>
+          ) : request.method !== "select" ? (
+            <button
+              onClick={submitValue}
+              className="text-sm"
+              style={{ border: "1px solid var(--accent)", borderRadius: 6, background: "var(--accent)", color: "white", padding: "7px 12px" }}
+            >
+              Submit
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onContextUsageChange }: Props) {
   const {
     loading, error, messages, entryIds, streamState,
@@ -101,11 +237,14 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     isAborting,
     sseState,
     loopWarning,
+    pendingUiRequest,
+    uiNotice,
     messagesEndRef, scrollContainerRef,
     lastUserMsgRef,
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handleAbortCompaction,
     handleToolPresetChange, handleThinkingLevelChange, handleAgentEventRef, clearLoopWarning,
+    handleExtensionUIResponse, clearUiNotice,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange,
@@ -304,6 +443,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         </div>
       )}
 
+      {pendingUiRequest && (
+        <ExtensionUIDialog request={pendingUiRequest} onResponse={handleExtensionUIResponse} />
+      )}
+
       {isEmptyNew ? (
         <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
           <div className="w-full max-w-[820px]">
@@ -458,6 +601,22 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                 知道了
               </button>
             )}
+          </div>
+        )}
+        {uiNotice && (
+          <div
+            className={`flex items-center gap-3 border-t px-4 py-2.5 text-sm ${
+              uiNotice.type === "error"
+                ? "border-red-500/30 bg-red-500/15 text-red-400"
+                : uiNotice.type === "warning"
+                ? "border-yellow-500/30 bg-yellow-500/15 text-yellow-400"
+                : "border-blue-500/20 bg-blue-500/10 text-blue-400"
+            }`}
+          >
+            <span className="flex-1">{uiNotice.message}</span>
+            <button onClick={clearUiNotice} className="rounded px-2 py-0.5 text-xs hover:bg-white/10">
+              Close
+            </button>
           </div>
         )}
         {chatInputElement}

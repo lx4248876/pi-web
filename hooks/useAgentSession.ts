@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useReducer } from "react";
 import type { AgentMessage, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import { appendCompletedMessage } from "@/lib/agent-message-merge";
 import type { ToolEntry } from "@/components/ToolPanel";
 
 export interface SessionData {
@@ -47,6 +48,26 @@ function streamReducer(state: StreamingState, action: StreamAction): StreamingSt
 interface AgentEvent {
   type: string;
   [key: string]: unknown;
+}
+
+export type ExtensionUIRequest =
+  | { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
+  | { type: "extension_ui_request"; id: string; method: "confirm"; title: string; message: string; timeout?: number }
+  | { type: "extension_ui_request"; id: string; method: "input"; title: string; placeholder?: string; timeout?: number }
+  | { type: "extension_ui_request"; id: string; method: "editor"; title: string; prefill?: string }
+  | { type: "extension_ui_request"; id: string; method: "notify"; message: string; notifyType?: "info" | "warning" | "error" }
+  | { type: "extension_ui_request"; id: string; method: "setStatus"; statusKey: string; statusText?: string }
+  | { type: "extension_ui_request"; id: string; method: "setWidget"; widgetKey: string; widgetLines?: string[]; widgetPlacement?: "aboveEditor" | "belowEditor" }
+  | { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
+  | { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+
+export type ExtensionUIResponse =
+  | { type: "extension_ui_response"; id: string; value: string }
+  | { type: "extension_ui_response"; id: string; confirmed: boolean }
+  | { type: "extension_ui_response"; id: string; cancelled: true };
+
+function isDialogUiRequest(event: ExtensionUIRequest): event is Extract<ExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }> {
+  return event.method === "select" || event.method === "confirm" || event.method === "input" || event.method === "editor";
 }
 
 export type AgentPhase =
@@ -117,6 +138,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [isAborting, setIsAborting] = useState(false);
   const [sseState, setSseState] = useState<"connecting" | "connected" | "disconnected">("disconnected");
   const [loopWarning, setLoopWarning] = useState<{ level: "soft" | "strong" | "hard"; message: string; count: number } | null>(null);
+  const [pendingUiRequest, setPendingUiRequest] = useState<Extract<ExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }> | null>(null);
+  const [uiNotice, setUiNotice] = useState<{ message: string; type?: "info" | "warning" | "error" } | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -309,7 +332,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "message_end": {
         const completed = event.message as AgentMessage | undefined;
         if (completed) {
-          setMessages((prev) => [...prev, normalizeToolCalls(completed)]);
+          setMessages((prev) => appendCompletedMessage(prev, normalizeToolCalls(completed)));
           
           // 检测到可重试的错误时自动发送"继续"
           if (
@@ -392,6 +415,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setTimeout(() => setLoopWarning(null), 10000);
         }
         // Hard warnings stay until user dismisses
+        break;
+      }
+      case "extension_ui_request": {
+        const request = event as ExtensionUIRequest;
+        if (isDialogUiRequest(request)) {
+          setPendingUiRequest(request);
+          break;
+        }
+        if (request.method === "notify") {
+          setUiNotice({ message: request.message, type: request.notifyType });
+          setTimeout(() => setUiNotice(null), request.notifyType === "error" ? 8000 : 4500);
+          break;
+        }
+        if (request.method === "set_editor_text") {
+          opts.chatInputRef?.current?.insertIfEmpty(request.text);
+          break;
+        }
+        if (request.method === "setTitle" && request.title) {
+          document.title = request.title;
+        }
         break;
       }
       case "error": {
@@ -628,6 +671,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  const handleExtensionUIResponse = useCallback(async (response: ExtensionUIResponse) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    if (pendingUiRequest?.id === response.id) setPendingUiRequest(null);
+    try {
+      await sendAgentCommand(sid, response);
+    } catch (e) {
+      console.error("Failed to send extension UI response:", e);
+    }
+  }, [pendingUiRequest?.id]);
+
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     setThinkingLevel(level);
     if (level === "auto") return; // "auto" leaves pi's current setting untouched
@@ -754,6 +808,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setLoopWarning(null);
   }, []);
 
+  const clearUiNotice = useCallback(() => {
+    setUiNotice(null);
+  }, []);
+
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
@@ -765,6 +823,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isAborting,
     sseState,
     loopWarning,
+    pendingUiRequest,
+    uiNotice,
     // Refs
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
@@ -773,6 +833,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleCompact, handleSteer, handleFollowUp, handleAbortCompaction,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId, clearLoopWarning,
+    handleExtensionUIResponse, clearUiNotice,
     // Subscriptions
     handleAgentEventRef,
   };

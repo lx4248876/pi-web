@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.claude/
+.idea/
+coverage/
+out/
+build/
+
+package-lock.json
+bun.lock
+tsconfig.tsbuildinfo
+research-report.json
+*.tsbuildinfo

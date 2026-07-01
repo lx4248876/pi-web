@@ -1,4 +1,12 @@
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import { createAgentSession, defineTool, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionUIContext,
+  ExtensionUIDialogOptions,
+  RpcExtensionUIResponse,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { cacheSessionPath } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 
@@ -25,6 +33,177 @@ export interface AgentEvent {
 
 type EventListener = (event: AgentEvent) => void;
 
+type PendingExtensionRequest = {
+  resolve: (response: RpcExtensionUIResponse) => void;
+  reject: (error: unknown) => void;
+};
+
+const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const COMPAT_UI_TOOL_NAMES = ["AskUserQuestion", "request_user_input"];
+const RPC_THEME = new Theme(
+  {
+    accent: "#38bdf8",
+    border: "#64748b",
+    borderAccent: "#38bdf8",
+    borderMuted: "#475569",
+    success: "#22c55e",
+    error: "#ef4444",
+    warning: "#f59e0b",
+    muted: "#94a3b8",
+    dim: "#64748b",
+    text: "#e5e7eb",
+    thinkingText: "#a78bfa",
+    userMessageText: "#e5e7eb",
+    customMessageText: "#e5e7eb",
+    customMessageLabel: "#38bdf8",
+    toolTitle: "#38bdf8",
+    toolOutput: "#cbd5e1",
+    mdHeading: "#f8fafc",
+    mdLink: "#38bdf8",
+    mdLinkUrl: "#7dd3fc",
+    mdCode: "#fbbf24",
+    mdCodeBlock: "#cbd5e1",
+    mdCodeBlockBorder: "#475569",
+    mdQuote: "#cbd5e1",
+    mdQuoteBorder: "#64748b",
+    mdHr: "#64748b",
+    mdListBullet: "#38bdf8",
+    toolDiffAdded: "#22c55e",
+    toolDiffRemoved: "#ef4444",
+    toolDiffContext: "#94a3b8",
+    syntaxComment: "#64748b",
+    syntaxKeyword: "#c084fc",
+    syntaxFunction: "#38bdf8",
+    syntaxVariable: "#e5e7eb",
+    syntaxString: "#86efac",
+    syntaxNumber: "#fbbf24",
+    syntaxType: "#67e8f9",
+    syntaxOperator: "#94a3b8",
+    syntaxPunctuation: "#94a3b8",
+    thinkingOff: "#64748b",
+    thinkingMinimal: "#22c55e",
+    thinkingLow: "#84cc16",
+    thinkingMedium: "#f59e0b",
+    thinkingHigh: "#fb7185",
+    thinkingXhigh: "#c084fc",
+    bashMode: "#38bdf8",
+  },
+  {
+    selectedBg: "#1e293b",
+    userMessageBg: "#0f172a",
+    customMessageBg: "#111827",
+    toolPendingBg: "#1e293b",
+    toolSuccessBg: "#052e16",
+    toolErrorBg: "#450a0a",
+  },
+  "truecolor",
+  { name: "pi-web-rpc" },
+);
+
+function withCompatUiTools(toolNames: string[]): string[] {
+  if (toolNames.length === 0) return [];
+  return Array.from(new Set([...toolNames, ...COMPAT_UI_TOOL_NAMES]));
+}
+
+function textResult(text: string) {
+  return { content: [{ type: "text" as const, text }], details: undefined };
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeUiOptions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        const record = item as Record<string, unknown>;
+        return asNonEmptyString(record.label) ?? asNonEmptyString(record.value) ?? asNonEmptyString(record.description);
+      }
+      return undefined;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function firstQuestionRecord(params: Record<string, unknown>): Record<string, unknown> | undefined {
+  const questions = params.questions;
+  if (!Array.isArray(questions)) return undefined;
+  const first = questions[0];
+  return first && typeof first === "object" ? first as Record<string, unknown> : undefined;
+}
+
+function readQuestionRequest(params: Record<string, unknown>) {
+  const firstQuestion = firstQuestionRecord(params);
+  const title =
+    asNonEmptyString(params.title) ??
+    asNonEmptyString(params.header) ??
+    asNonEmptyString(firstQuestion?.header) ??
+    "User input";
+  const question =
+    asNonEmptyString(params.question) ??
+    asNonEmptyString(params.message) ??
+    asNonEmptyString(firstQuestion?.question) ??
+    title;
+  const placeholder =
+    asNonEmptyString(params.placeholder) ??
+    asNonEmptyString(firstQuestion?.placeholder) ??
+    undefined;
+  const options = normalizeUiOptions(params.options).length > 0
+    ? normalizeUiOptions(params.options)
+    : normalizeUiOptions(firstQuestion?.options);
+
+  return { title, question, placeholder, options };
+}
+
+const uiQuestionParameters = Type.Object({
+  title: Type.Optional(Type.String({ description: "Dialog title" })),
+  header: Type.Optional(Type.String({ description: "Short dialog header" })),
+  question: Type.Optional(Type.String({ description: "Question to ask the user" })),
+  message: Type.Optional(Type.String({ description: "Message to show the user" })),
+  placeholder: Type.Optional(Type.String({ description: "Input placeholder text" })),
+  options: Type.Optional(Type.Array(Type.Any(), { description: "Selectable options as strings or objects with labels" })),
+  questions: Type.Optional(Type.Array(Type.Any(), { description: "Codex-style question objects" })),
+});
+
+function createCompatUiTools(): ToolDefinition[] {
+  const executeQuestion = async (
+    _toolCallId: string,
+    rawParams: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    _onUpdate: unknown,
+    ctx: { ui: ExtensionUIContext },
+  ) => {
+    const { title, question, placeholder, options } = readQuestionRequest(rawParams);
+    const value = options.length > 0
+      ? await ctx.ui.select(question, options, { signal })
+      : await ctx.ui.input(question, placeholder, { signal });
+
+    if (value === undefined) return textResult("User cancelled.");
+    return textResult(options.length > 0 ? `User selected: ${value}` : `User answered: ${value}`);
+  };
+
+  return [
+    defineTool({
+      name: "AskUserQuestion",
+      label: "Ask user",
+      description: "Ask the user a question through the host UI and return their answer.",
+      promptSnippet: "Ask the user a question when you need a missing decision or value.",
+      parameters: uiQuestionParameters,
+      execute: executeQuestion,
+    }),
+    defineTool({
+      name: "request_user_input",
+      label: "Request user input",
+      description: "Request short user input or a choice through the host UI. Accepts Codex-style questions/options.",
+      promptSnippet: "Request user input with a dialog when interaction is needed.",
+      parameters: uiQuestionParameters,
+      execute: executeQuestion,
+    }),
+  ];
+}
+
 // ============================================================================
 // AgentSessionWrapper
 // Wraps AgentSession with the same interface the rest of the app expects
@@ -35,6 +214,7 @@ export class AgentSessionWrapper {
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
+  private pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
   private _alive = true;
 
   // Loop detection state
@@ -63,9 +243,126 @@ export class AgentSessionWrapper {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
       this.detectLoop(event);
-      for (const l of this.listeners) l(event);
+      this.emit(event);
     });
     this.resetIdleTimer();
+  }
+
+  emit(event: AgentEvent): void {
+    for (const l of this.listeners) l(event);
+  }
+
+  private createDialogPromise<T>(
+    opts: ExtensionUIDialogOptions | undefined,
+    defaultValue: T,
+    request: Omit<AgentEvent, "type" | "id">,
+    parseResponse: (response: RpcExtensionUIResponse) => T,
+  ): Promise<T> {
+    if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        opts?.signal?.removeEventListener("abort", onAbort);
+        this.pendingExtensionRequests.delete(id);
+      };
+      const onAbort = () => {
+        cleanup();
+        resolve(defaultValue);
+      };
+
+      opts?.signal?.addEventListener("abort", onAbort, { once: true });
+      if (opts?.timeout) {
+        timeoutId = setTimeout(() => {
+          cleanup();
+          resolve(defaultValue);
+        }, opts.timeout);
+      }
+
+      this.pendingExtensionRequests.set(id, {
+        resolve: (response) => {
+          cleanup();
+          resolve(parseResponse(response));
+        },
+        reject,
+      });
+      this.emit({ type: "extension_ui_request", id, ...request });
+    });
+  }
+
+  createExtensionUIContext(): ExtensionUIContext {
+    return {
+      select: (title, options, opts) => this.createDialogPromise(
+        opts,
+        undefined,
+        { method: "select", title, options, timeout: opts?.timeout },
+        (response) => "cancelled" in response && response.cancelled ? undefined : "value" in response ? response.value : undefined,
+      ),
+      confirm: (title, message, opts) => this.createDialogPromise(
+        opts,
+        false,
+        { method: "confirm", title, message, timeout: opts?.timeout },
+        (response) => "cancelled" in response && response.cancelled ? false : "confirmed" in response ? response.confirmed : false,
+      ),
+      input: (title, placeholder, opts) => this.createDialogPromise(
+        opts,
+        undefined,
+        { method: "input", title, placeholder, timeout: opts?.timeout },
+        (response) => "cancelled" in response && response.cancelled ? undefined : "value" in response ? response.value : undefined,
+      ),
+      notify: (message, type) => {
+        this.emit({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType: type });
+      },
+      onTerminalInput: () => () => {},
+      setStatus: (key, text) => {
+        this.emit({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: key, statusText: text });
+      },
+      setWorkingMessage: () => {},
+      setWorkingVisible: () => {},
+      setWorkingIndicator: () => {},
+      setHiddenThinkingLabel: () => {},
+      setWidget: (key, content, options) => {
+        if (content === undefined || Array.isArray(content)) {
+          this.emit({
+            type: "extension_ui_request",
+            id: randomUUID(),
+            method: "setWidget",
+            widgetKey: key,
+            widgetLines: content,
+            widgetPlacement: options?.placement,
+          });
+        }
+      },
+      setFooter: () => {},
+      setHeader: () => {},
+      setTitle: (title) => {
+        this.emit({ type: "extension_ui_request", id: randomUUID(), method: "setTitle", title });
+      },
+      custom: async () => undefined,
+      pasteToEditor: (text) => {
+        this.emit({ type: "extension_ui_request", id: randomUUID(), method: "set_editor_text", text });
+      },
+      setEditorText: (text) => {
+        this.emit({ type: "extension_ui_request", id: randomUUID(), method: "set_editor_text", text });
+      },
+      getEditorText: () => "",
+      editor: (title, prefill) => this.createDialogPromise(
+        undefined,
+        undefined,
+        { method: "editor", title, prefill },
+        (response) => "cancelled" in response && response.cancelled ? undefined : "value" in response ? response.value : undefined,
+      ),
+      addAutocompleteProvider: () => {},
+      setEditorComponent: () => {},
+      getEditorComponent: () => undefined,
+      theme: RPC_THEME,
+      getAllThemes: () => [],
+      getTheme: () => undefined,
+      setTheme: () => ({ success: false, error: "Theme switching not supported in pi-web" }),
+      getToolsExpanded: () => false,
+      setToolsExpanded: () => {},
+    } as ExtensionUIContext;
   }
 
   private resetIdleTimer(): void {
@@ -181,7 +478,7 @@ export class AgentSessionWrapper {
       count: this.loopDetection.consecutiveSimilar,
     };
     
-    for (const l of this.listeners) l(warningEvent);
+    this.emit(warningEvent);
   }
 
   /**
@@ -197,7 +494,7 @@ export class AgentSessionWrapper {
       count: this.loopDetection.consecutiveSimilar,
     };
     
-    for (const l of this.listeners) l(warningEvent);
+    this.emit(warningEvent);
   }
 
   /**
@@ -212,7 +509,7 @@ export class AgentSessionWrapper {
       count: this.loopDetection.consecutiveSimilar,
     };
     
-    for (const l of this.listeners) l(stopEvent);
+    this.emit(stopEvent);
     
     // Abort current generation
     this.inner.abort().catch(() => {});
@@ -277,8 +574,18 @@ export class AgentSessionWrapper {
             type: "error",
             message: err instanceof Error ? err.message : String(err),
           };
-          for (const l of this.listeners) l(errorEvent);
+          this.emit(errorEvent);
         });
+        return null;
+      }
+
+      case "extension_ui_response": {
+        const response = command as RpcExtensionUIResponse;
+        const pending = this.pendingExtensionRequests.get(response.id);
+        if (pending) {
+          this.pendingExtensionRequests.delete(response.id);
+          pending.resolve(response);
+        }
         return null;
       }
 
@@ -421,7 +728,7 @@ export class AgentSessionWrapper {
       }
 
       case "set_tools": {
-        this.inner.setActiveToolsByName(command.toolNames as string[]);
+        this.inner.setActiveToolsByName(withCompatUiTools(command.toolNames as string[]));
         return null;
       }
 
@@ -509,22 +816,22 @@ export async function startRpcSession(
     // Determine which tools to pass based on requested toolNames.
     // Since v0.68.0, createAgentSession expects string[] tool names instead of Tool[] instances.
     // Pass all built-in coding tool names by default; for "all off", pass empty array.
-    const allCodingToolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"];
     let toolsOption: string[] | undefined;
     if (toolNames !== undefined) {
-      toolsOption = toolNames.length === 0 ? [] : allCodingToolNames;
+      toolsOption = toolNames.length === 0 ? [] : withCompatUiTools(CODING_TOOL_NAMES);
     }
 
     const { session: inner } = await createAgentSession({
       cwd,
       agentDir,
       sessionManager,
+      customTools: createCompatUiTools(),
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
     });
 
     // If specific tool names were requested (non-empty), narrow active tools now
     if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(toolNames);
+      inner.setActiveToolsByName(withCompatUiTools(toolNames));
     }
 
     // When all tools are disabled, clear the system prompt entirely.
@@ -535,6 +842,19 @@ export async function startRpcSession(
     }
 
     const wrapper = new AgentSessionWrapper(inner);
+    await inner.bindExtensions({
+      uiContext: wrapper.createExtensionUIContext(),
+      mode: "rpc",
+      onError: (err) => {
+        console.error("[rpc-manager] extension error:", err);
+        wrapper.emit({
+          type: "extension_error",
+          extensionPath: err.extensionPath,
+          event: err.event,
+          error: err.error,
+        });
+      },
+    });
     wrapper.start();
 
     const realSessionId = inner.sessionId as string;

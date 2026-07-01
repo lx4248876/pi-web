@@ -1,4 +1,4 @@
-import type { SessionManager, SettingsManager, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, SessionManager, SettingsManager, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 export interface ContextUsage {
   percent: number | null;
@@ -39,6 +39,7 @@ export interface AgentSessionLike {
   readonly agent: { state?: { systemPrompt?: string; thinkingLevel?: string } };
 
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
+  bindExtensions(bindings: Parameters<AgentSession["bindExtensions"]>[0]): Promise<void>;
   prompt(text: string, options?: { images?: Array<{ type: "image"; data: string; mimeType: string }> }): Promise<void>;
   abort(): Promise<void>;
   setModel(model: ModelLike): Promise<void>;

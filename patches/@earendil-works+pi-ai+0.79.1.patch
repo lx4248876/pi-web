@@ -1,0 +1,49 @@
+diff --git a/node_modules/@earendil-works/pi-ai/dist/providers/google-vertex.js b/node_modules/@earendil-works/pi-ai/dist/providers/google-vertex.js
+index 3262697..7682693 100644
+--- a/node_modules/@earendil-works/pi-ai/dist/providers/google-vertex.js
++++ b/node_modules/@earendil-works/pi-ai/dist/providers/google-vertex.js
+@@ -114,6 +114,9 @@ export const streamGoogleVertex = (model, context, options) => {
+                             }
+                         }
+                         if (part.functionCall) {
++                            const inheritedSignature = currentBlock?.thinkingSignature
++                                || currentBlock?.textSignature
++                                || undefined;
+                             if (currentBlock) {
+                                 if (currentBlock.type === "text") {
+                                     stream.push({
+@@ -143,7 +146,7 @@ export const streamGoogleVertex = (model, context, options) => {
+                                 id: toolCallId,
+                                 name: part.functionCall.name || "",
+                                 arguments: part.functionCall.args ?? {},
+-                                ...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
++                                ...((part.thoughtSignature || inheritedSignature) && { thoughtSignature: part.thoughtSignature || inheritedSignature }),
+                             };
+                             output.content.push(toolCall);
+                             stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+diff --git a/node_modules/@earendil-works/pi-ai/dist/providers/google.js b/node_modules/@earendil-works/pi-ai/dist/providers/google.js
+index 8dc6100..2733655 100644
+--- a/node_modules/@earendil-works/pi-ai/dist/providers/google.js
++++ b/node_modules/@earendil-works/pi-ai/dist/providers/google.js
+@@ -105,6 +105,12 @@ export const streamGoogle = (model, context, options) => {
+                             }
+                         }
+                         if (part.functionCall) {
++                            // Inherit thoughtSignature from the preceding thinking/text block if the
++                            // functionCall part itself doesn't carry one.  Gemini sometimes places the
++                            // signature on the last thinking/text part before the functionCall.
++                            const inheritedSignature = currentBlock?.thinkingSignature
++                                || currentBlock?.textSignature
++                                || undefined;
+                             if (currentBlock) {
+                                 if (currentBlock.type === "text") {
+                                     stream.push({
+@@ -135,7 +141,7 @@ export const streamGoogle = (model, context, options) => {
+                                 id: toolCallId,
+                                 name: part.functionCall.name || "",
+                                 arguments: part.functionCall.args ?? {},
+-                                ...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
++                                ...((part.thoughtSignature || inheritedSignature) && { thoughtSignature: part.thoughtSignature || inheritedSignature }),
+                             };
+                             output.content.push(toolCall);
+                             stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
