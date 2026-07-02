@@ -14,7 +14,7 @@ interface Props {
   initialSessionId?: string | null;
   onInitialRestoreDone?: () => void;
   refreshKey?: number;
-  onSessionDeleted?: (sessionId: string) => void;
+  onSessionDeleted?: (sessionId: string, cwd: string) => void;
   selectedCwd?: string | null;
   onCwdChange?: (cwd: string | null) => void;
   onOpenFile?: (filePath: string, fileName: string) => void;
@@ -559,11 +559,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // Construct a nested grouping: projects map to session trees
   const projectList = useMemo(() => {
+    const persistentCwds = new Set(recentCwdOptions.filter((o) => o.source !== "session").map((o) => o.cwd));
     return recentCwdOptions.map(({ cwd }) => {
       const sessionsForCwd = allSessions.filter((s) => s.cwd === cwd);
       const tree = buildSessionTree(sessionsForCwd);
       return { cwd, tree };
-    }).filter(p => !hiddenCwds[p.cwd] && (p.tree.length > 0 || p.cwd === selectedCwdProp || p.cwd === selectedCwd));
+    }).filter(p => !hiddenCwds[p.cwd] && (p.tree.length > 0 || p.cwd === selectedCwdProp || p.cwd === selectedCwd || persistentCwds.has(p.cwd)));
   }, [recentCwdOptions, allSessions, selectedCwd, selectedCwdProp, hiddenCwds]);
 
   // Expanded/collapsed state of each project folder node
@@ -1191,9 +1192,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         selectedSessionId={selectedSessionId}
                         onSelectSession={onSelectSession}
                         onRenamed={loadSessions}
-                        onSessionDeleted={(id) => {
-                          onSessionDeleted?.(id);
-                          loadSessions();
+                        onSessionDeleted={(id, cwd) => {
+                          onSessionDeleted?.(id, cwd);
+                          loadSessions().then(() => {
+                            // 删除会话后，如果该项目的最后一个会话也被删了，
+                            // 仍应保留项目在工作区列表中，而不是随会话一起消失。
+                            if (!hiddenCwds[cwd]) rememberCwd(cwd);
+                          });
                         }}
                         depth={0}
                       />
@@ -1376,7 +1381,7 @@ function SessionTreeItem({
   selectedSessionId: string | null;
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
-  onSessionDeleted?: (id: string) => void;
+  onSessionDeleted?: (id: string, cwd: string) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1401,7 +1406,7 @@ function SessionTreeItem({
           isSelected={node.session.id === selectedSessionId}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
-          onDeleted={(id) => onSessionDeleted?.(id)}
+          onDeleted={(id, cwd) => onSessionDeleted?.(id, cwd)}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -1442,7 +1447,7 @@ function SessionItem({
   isSelected: boolean;
   onClick: () => void;
   onRenamed?: () => void;
-  onDeleted?: (id: string) => void;
+  onDeleted?: (id: string, cwd: string) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -1491,11 +1496,11 @@ function SessionItem({
     setDeleting(true);
     try {
       await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-      onDeleted?.(session.id);
+      onDeleted?.(session.id, session.cwd);
     } catch {
       setDeleting(false);
     }
-  }, [session.id, onDeleted]);
+  }, [session.id, session.cwd, onDeleted]);
 
   const handleDeleteCancel = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
