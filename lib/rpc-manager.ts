@@ -28,6 +28,8 @@ const LOOP_HARD_STOP_THRESHOLD = 10; // Hard stop: abort and notify user
 /** Similarity threshold for thinking content (0-1) */
 const THINKING_SIMILARITY_THRESHOLD = 0.85;
 
+const RPC_EXTENSION_STARTUP_TIMEOUT_MS = 5_000;
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -43,6 +45,13 @@ type PendingExtensionRequest = {
 	requestEvent: AgentEvent;
 	resolve: (response: RpcExtensionUIResponse) => void;
 	reject: (error: unknown) => void;
+};
+
+type ExtensionRunnerLike = {
+	extensions?: Array<{
+		path?: string;
+		handlers?: Map<string, Array<(event: unknown, ctx: unknown) => unknown>>;
+	}>;
 };
 
 function isDialogRequestEvent(event: AgentEvent): boolean {
@@ -117,6 +126,41 @@ const RPC_THEME = new Theme(
 
 function textResult(text: string) {
 	return { content: [{ type: "text" as const, text }], details: undefined };
+}
+
+export function guardRpcExtensionStartupHandlers(
+	runner: ExtensionRunnerLike | undefined,
+	timeoutMs = RPC_EXTENSION_STARTUP_TIMEOUT_MS,
+): void {
+	if (!runner?.extensions) return;
+	for (const ext of runner.extensions) {
+		for (const eventName of ["session_start", "resources_discover"]) {
+			const handlers = ext.handlers?.get(eventName);
+			if (!handlers?.length) continue;
+			ext.handlers?.set(
+				eventName,
+				handlers.map((handler) => async (event: unknown, ctx: unknown) => {
+					let timeoutId: ReturnType<typeof setTimeout> | undefined;
+					try {
+						return await Promise.race([
+							Promise.resolve(handler(event, ctx)),
+							new Promise<never>((_resolve, reject) => {
+								timeoutId = setTimeout(() => {
+									reject(
+										new Error(
+											`RPC extension startup handler timed out after ${timeoutMs}ms`,
+										),
+									);
+								}, timeoutMs);
+							}),
+						]);
+					} finally {
+						if (timeoutId) clearTimeout(timeoutId);
+					}
+				}),
+			);
+		}
+	}
 }
 
 function asNonEmptyString(value: unknown): string | undefined {
@@ -1082,6 +1126,10 @@ export async function startRpcSession(
 		}
 
 		const wrapper = new AgentSessionWrapper(inner);
+		guardRpcExtensionStartupHandlers(
+			(inner as unknown as { _extensionRunner?: ExtensionRunnerLike })
+				._extensionRunner,
+		);
 		await inner.bindExtensions({
 			uiContext: wrapper.createExtensionUIContext(),
 			mode: "rpc",
