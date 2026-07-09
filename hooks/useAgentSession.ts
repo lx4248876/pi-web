@@ -725,10 +725,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
 							cwd: newSessionCwd,
-							type: "prompt",
-							message,
+							type: "create",
 							toolNames,
-							...(piImages?.length ? { images: piImages } : {}),
 							...(selectedModel
 								? {
 										provider: selectedModel.provider,
@@ -752,6 +750,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 					const realId = result.sessionId;
 					sessionIdRef.current = realId;
 					connectEvents(realId);
+					await sendAgentCommand(realId, {
+						type: "prompt",
+						message,
+						...(piImages?.length ? { images: piImages } : {}),
+					});
 					onSessionCreated?.({
 						id: realId,
 						path: "",
