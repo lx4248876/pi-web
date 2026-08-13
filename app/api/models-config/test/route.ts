@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { completeSimple, type AssistantMessage } from "@earendil-works/pi-ai";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { type AssistantMessage } from "@earendil-works/pi-ai";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +48,9 @@ export async function POST(req: Request) {
       },
     }, null, 2), "utf8");
 
-    const registry = ModelRegistry.create(AuthStorage.create(), modelsPath);
+    // 0.81.1：自定义 models.json 经 ModelRuntime.create({ modelsPath }) 加载
+    const runtime = await ModelRuntime.create({ modelsPath });
+    const registry = new ModelRegistry(runtime);
     const loadError = registry.getError();
     if (loadError) return NextResponse.json({ ok: false, error: loadError });
 
@@ -65,7 +67,8 @@ export async function POST(req: Request) {
     const startedAt = Date.now();
 
     try {
-      const message = await completeSimple(model, {
+      // 0.81.1：completeSimple 改为 Models 实例方法
+      const message = await runtime.completeSimple(model, {
         messages: [{
           role: "user",
           content: "Reply with OK only.",

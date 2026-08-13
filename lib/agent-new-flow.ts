@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import { randomUUID } from "node:crypto";
 import { parseAgentNewRequest, type AgentNewRequest } from "./agent-new-request";
 import type { AgentSessionWrapper } from "./rpc-manager";
 
@@ -26,7 +27,10 @@ export async function createNewAgentSession(
 		};
 	}
 
-	const tempKey = `__new__${Date.now()}`;
+	// Unique per call: Date.now() collides for concurrent new-session requests within the
+	// same millisecond, causing them to share a __piStartLocks entry and both return the
+	// first session (wrong cwd/type).
+	const tempKey = `__new__${randomUUID()}`;
 	const { session, realSessionId } = await startRpcSession(
 		tempKey,
 		"",

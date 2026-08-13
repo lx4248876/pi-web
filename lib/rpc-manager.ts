@@ -110,6 +110,8 @@ const RPC_THEME = new Theme(
 		thinkingMedium: "#f59e0b",
 		thinkingHigh: "#fb7185",
 		thinkingXhigh: "#c084fc",
+		// 0.81.1 新增的主题色键
+		thinkingMax: "#e879f9",
 		bashMode: "#38bdf8",
 	},
 	{
@@ -825,14 +827,18 @@ export class AgentSessionWrapper {
 					provider: string;
 					modelId: string;
 				};
-				const registry = this.inner.modelRegistry;
-				let model = registry.find(provider, modelId);
+				// 0.81.1：modelRegistry → modelRuntime（getModel + refresh）
+				const runtime = this.inner.modelRuntime;
+				let model = runtime.getModel(provider, modelId);
 				if (!model) {
-					// Model not found in the cached registry. Refresh from models.json in case it was newly added!
-					if (typeof registry.refresh === "function") {
-						registry.refresh();
-					}
-					model = registry.find(provider, modelId);
+					// Model not found in the cached registry. Refresh from the offline local store
+					// (models.json / models-store) in case it was newly added. Deliberately do NOT
+					// pass allowNetwork here: `refresh()` defaults to allowNetwork=true (an unbounded,
+					// awaited, network-fetching call with no timeout), which can hang the model-switch
+					// request in offline/blocked environments. Cloud models already present in the
+					// runtime snapshot are returned by getModel without ever reaching this path.
+					await runtime.refresh({ allowNetwork: false });
+					model = runtime.getModel(provider, modelId);
 				}
 				if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 				await this.inner.setModel(model);
@@ -1130,20 +1136,33 @@ export async function startRpcSession(
 			(inner as unknown as { _extensionRunner?: ExtensionRunnerLike })
 				._extensionRunner,
 		);
-		await inner.bindExtensions({
-			uiContext: wrapper.createExtensionUIContext(),
-			mode: "rpc",
-			onError: (err) => {
-				console.error("[rpc-manager] extension error:", err);
-				wrapper.emit({
-					type: "extension_error",
-					extensionPath: err.extensionPath,
-					event: err.event,
-					error: err.error,
-				});
-			},
-		});
-		wrapper.start();
+		try {
+			await inner.bindExtensions({
+				uiContext: wrapper.createExtensionUIContext(),
+				mode: "rpc",
+				onError: (err) => {
+					console.error("[rpc-manager] extension error:", err);
+					wrapper.emit({
+						type: "extension_error",
+						extensionPath: err.extensionPath,
+						event: err.event,
+						error: err.error,
+					});
+				},
+			});
+			wrapper.start();
+		} catch (err) {
+			// If extension binding fails (or throws after the wrapper was constructed),
+			// abandon the partially-initialized session instead of leaking an unregistered,
+			// never-destroyed wrapper/process that has already opened its session files.
+			wrapper.destroy();
+			try {
+				await inner.abort();
+			} catch {
+				// ignore teardown errors; the original error is the one to surface
+			}
+			throw err;
+		}
 
 		const realSessionId = inner.sessionId as string;
 		const realSessionFile = inner.sessionFile as string | undefined;

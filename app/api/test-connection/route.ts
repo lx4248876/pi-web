@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
-import { getApiProvider } from "@earendil-works/pi-ai";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +14,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "provider and modelId are required" }, { status: 400 });
     }
 
-    const authStorage = AuthStorage.create();
-    const registry = ModelRegistry.create(authStorage);
+    // 0.81.1：AuthStorage/ModelRegistry.create 已移除，改走 ModelRuntime
+    const runtime = await ModelRuntime.create();
+    const registry = new ModelRegistry(runtime);
     const model = registry.find(provider, modelId);
     if (!model) {
       return NextResponse.json({ ok: false, error: `Model not found: ${provider}/${modelId}` }, { status: 404 });
@@ -27,13 +27,6 @@ export async function POST(req: Request) {
     if (!authResult.ok) {
       return NextResponse.json({ ok: false, error: authResult.error });
     }
-
-    // Resolve the stream function for this model's API type
-    const apiProvider = getApiProvider(model.api);
-    if (!apiProvider) {
-      return NextResponse.json({ ok: false, error: `No API provider registered for API type: ${model.api}` });
-    }
-    const streamFn = apiProvider.stream;
 
     // Build a minimal context
     const context: Context = {
@@ -54,7 +47,8 @@ export async function POST(req: Request) {
       timeoutMs: 15_000,
     };
 
-    const stream = streamFn(model, context, options);
+    // 0.81.1：getApiProvider 已移除，统一经 ModelRuntime.stream 发起（内部完成鉴权与传输选择）
+    const stream = runtime.stream(model, context, options);
 
     // EventStream is an AsyncIterable — use for-await-of
     let textReceived = "";

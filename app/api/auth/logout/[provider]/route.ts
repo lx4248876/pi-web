@@ -1,4 +1,4 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -7,11 +7,12 @@ export async function POST(
   { params }: { params: Promise<{ provider: string }> }
 ) {
   const { provider } = await params;
-  const authStorage = AuthStorage.create();
-  const providers = authStorage.getOAuthProviders();
-  if (!providers.find((p) => p.id === provider)) {
+  // 0.81.1：AuthStorage 已移除，OAuth 能力经 Provider.auth.oauth 判定，登出走 runtime.logout
+  const runtime = await ModelRuntime.create();
+  const target = runtime.getProvider(provider);
+  if (!target?.auth.oauth) {
     return Response.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
   }
-  authStorage.logout(provider);
+  await runtime.logout(provider);
   return Response.json({ ok: true });
 }

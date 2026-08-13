@@ -1,4 +1,4 @@
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
 
@@ -6,8 +6,9 @@ export const dynamic = "force-dynamic";
 const OAUTH_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex"]);
 
 export async function GET() {
-  const authStorage = AuthStorage.create();
-  const registry = ModelRegistry.create(authStorage);
+  // 0.81.1：AuthStorage/ModelRegistry.create 已移除，改走 ModelRuntime
+  const runtime = await ModelRuntime.create();
+  const registry = new ModelRegistry(runtime);
   const all = registry.getAll();
 
   // Deduplicate by provider, skip OAuth-only providers and custom providers (source=models_json_key)

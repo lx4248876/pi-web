@@ -281,12 +281,27 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	const pendingScrollToUserRef = useRef(false);
 	const messagesEndRef = useRef<HTMLDivElement | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+	// handleAgentEvent is memoized with stable deps, so it must read the latest
+	// handleSend / currentModel through refs to avoid stale-closure bugs (the
+	// auto-retry '继续' path and the error-message model label would otherwise
+	// use values captured from an old render).
+	const handleSendRef = useRef<
+		| ((message: string, images?: AttachedImage[], opts?: {
+				bypassRunning?: boolean;
+			}) => Promise<void>)
+		| null
+	>(null);
+	const currentModelRef = useRef<{
+		provider: string;
+		modelId: string;
+	} | null>(null);
 
 	const setNewSessionModel = opts.setNewSessionModel ?? setNewSessionModelState;
 	const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
 	const currentModel =
 		currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
+	currentModelRef.current = currentModel;
 	const displayModel = isNew ? newSessionModel : currentModel;
 
 	const sessionStats = (() => {
@@ -520,7 +535,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 							appendCompletedMessage(prev, normalizeToolCalls(completed)),
 						);
 
-						// 检测到可重试的错误时自动发送"继续"
+						// 检测到可重试的错误时自动发送"继续"。这里必须绕过 handleSend 的
+						// `agentRunning` 守卫：message_end 触发时 agent 仍标记为 running，
+						// 若走普通路径会被拦截而静默无操作。（改走 handleSendRef 以拿到最新闭包）
 						if (
 							completed.role === "assistant" &&
 							completed.stopReason === "error" &&
@@ -529,7 +546,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 						) {
 							console.log("Detected provider error, auto-retrying with '继续'");
 							setTimeout(() => {
-								handleSend("继续");
+								handleSendRef.current?.("继续", undefined, {
+									bypassRunning: true,
+								});
 							}, 1000);
 						}
 					}
@@ -655,8 +674,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 						{
 							role: "assistant",
 							content: [{ type: "text", text: `⚠️ 模型请求失败：${errMsg}` }],
-							model: currentModel?.modelId ?? "",
-							provider: currentModel?.provider ?? "",
+							model: currentModelRef.current?.modelId ?? "",
+							provider: currentModelRef.current?.provider ?? "",
 							stopReason: "error",
 							errorMessage: errMsg,
 							timestamp: Date.now(),
@@ -671,9 +690,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	handleAgentEventRef.current = handleAgentEvent;
 
 	const handleSend = useCallback(
-		async (message: string, images?: AttachedImage[]) => {
+		async (
+			message: string,
+			images?: AttachedImage[],
+			opts?: { bypassRunning?: boolean },
+		) => {
 			if (!message.trim() && !images?.length) return;
-			if (agentRunning) return;
+			// bypassRunning lets the auto-retry ('继续') send while the agent is still
+			// marked running at message_end; a normal user send must still be guarded.
+			if (agentRunning && !opts?.bypassRunning) return;
 
 			const imageBlocks = images?.map((img) => ({
 				type: "image" as const,
@@ -792,6 +817,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			onSessionCreated,
 		],
 	);
+	handleSendRef.current = handleSend;
 
 	const handleAbort = useCallback(async () => {
 		const sid = sessionIdRef.current;

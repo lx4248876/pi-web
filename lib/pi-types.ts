@@ -30,9 +30,10 @@ export interface AgentSessionLike {
   readonly autoCompactionEnabled: boolean;
   readonly autoRetryEnabled: boolean;
   readonly model: ModelLike | undefined;
-  readonly modelRegistry: {
-    find: (provider: string, modelId: string) => ModelLike | undefined;
-    refresh?: () => void;
+  // 0.81.1：AgentSession.modelRegistry 已移除，改暴露 modelRuntime
+  readonly modelRuntime: {
+    getModel: (provider: string, modelId: string) => ModelLike | undefined;
+    refresh: (options?: { allowNetwork?: boolean }) => Promise<unknown>;
   };
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;

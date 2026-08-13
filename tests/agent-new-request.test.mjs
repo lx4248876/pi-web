@@ -26,6 +26,7 @@ async function loadFlowModule() {
 		exports: moduleObj.exports,
 		require(specifier) {
 			if (specifier === "fs") return { existsSync: () => true };
+			if (specifier === "node:crypto") return { randomUUID: () => "test-uuid" };
 			if (specifier === "./agent-new-request") return requestExports;
 			throw new Error(`Unexpected require: ${specifier}`);
 		},

@@ -218,7 +218,6 @@ export function GitPanel({ cwd }: Props) {
         setError(null);
         setGitState(data);
         // Sync checkedFiles: add new files as checked, remove files no longer present
-        const currentFiles = new Set((data.modifiedFiles as GitFileInfo[]).map((f: GitFileInfo) => f.file));
         setCheckedFiles((prev) => {
           const next: Record<string, boolean> = {};
           // Keep only files that still exist in the new state

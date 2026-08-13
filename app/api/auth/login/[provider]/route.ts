@@ -1,4 +1,5 @@
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 
 export const dynamic = "force-dynamic";
 
@@ -57,10 +58,10 @@ export async function GET(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const authStorage = AuthStorage.create();
-      const providers = authStorage.getOAuthProviders();
-      const providerInfo = providers.find((p) => p.id === provider);
-      if (!providerInfo) {
+      // 0.81.1：AuthStorage 已移除，OAuth 登录改走 ModelRuntime.login + AuthInteraction
+      const runtime = await ModelRuntime.create();
+      const providerInfo = runtime.getProvider(provider);
+      if (!providerInfo?.auth.oauth) {
         send(controller, { type: "error", message: `Unknown provider: ${provider}` });
         controller.close();
         return;
@@ -116,64 +117,64 @@ export async function GET(
       // Also cancel on client disconnect
       abort.signal.addEventListener("abort", cleanup);
 
-      try {
-        await authStorage.login(provider, {
-          onAuth: (info: { url: string; instructions?: string }) => {
-            const request = getManualInputRequest();
-            send(controller, {
-              type: "auth",
-              url: info.url,
-              instructions: info.instructions ?? null,
-              token: request.token,
-            });
-          },
-          onDeviceCode: (info: {
-            userCode: string;
-            verificationUri: string;
-            intervalSeconds?: number;
-            expiresInSeconds?: number;
-          }) => {
-            send(controller, {
-              type: "device_code",
-              userCode: info.userCode,
-              verificationUri: info.verificationUri,
-              intervalSeconds: info.intervalSeconds ?? null,
-              expiresInSeconds: info.expiresInSeconds ?? null,
-            });
-          },
-          onPrompt: async (prompt: { message: string; placeholder?: string }) => {
-            const request = getManualInputRequest();
-            send(controller, {
-              type: "prompt_request",
-              message: prompt.message,
-              placeholder: prompt.placeholder ?? null,
-              token: request.token,
-            });
-            const value = await request.promise;
-            return value;
-          },
-          onProgress: (message: string) => {
-            send(controller, { type: "progress", message });
-          },
-          onSelect: async (prompt: { message: string; options: { id: string; label: string }[] }) => {
-            const request = createClientInputRequest();
-            send(controller, {
-              type: "select_request",
-              message: prompt.message,
-              options: prompt.options,
-              token: request.token,
-            });
-            const value = await request.promise;
-            return value || undefined;
-          },
-          onManualCodeInput: () => getManualInputRequest().promise,
-          signal: abort.signal,
-        });
+      // 把旧回调模型映射到 0.81.1 的 AuthInteraction（notify 推事件 / prompt 要输入），
+      // 前端 SSE 协议保持不变
+      const notify = (event: AuthEvent) => {
+        if (event.type === "auth_url") {
+          // auth 阶段即创建手动码 token，前端拿到后可直接提交 code（与旧行为一致）
+          const request = getManualInputRequest();
+          send(controller, {
+            type: "auth",
+            url: event.url,
+            instructions: event.instructions ?? null,
+            token: request.token,
+          });
+        } else if (event.type === "device_code") {
+          send(controller, {
+            type: "device_code",
+            userCode: event.userCode,
+            verificationUri: event.verificationUri,
+            intervalSeconds: event.intervalSeconds ?? null,
+            expiresInSeconds: event.expiresInSeconds ?? null,
+          });
+        } else if (event.type === "progress" || event.type === "info") {
+          send(controller, { type: "progress", message: event.message });
+        }
+      };
 
+      const prompt = async (p: AuthPrompt): Promise<string> => {
+        if (p.type === "manual_code") {
+          // 手动授权码：复用 auth 阶段已下发的 token，等待前端 POST code
+          return getManualInputRequest().promise;
+        }
+        if (p.type === "select") {
+          const request = createClientInputRequest();
+          send(controller, {
+            type: "select_request",
+            message: p.message,
+            options: p.options,
+            token: request.token,
+          });
+          const value = await request.promise;
+          return value;
+        }
+        // text / secret：通用文本输入
+        const request = createClientInputRequest();
+        send(controller, {
+          type: "prompt_request",
+          message: p.message,
+          placeholder: p.placeholder ?? null,
+          token: request.token,
+        });
+        return request.promise;
+      };
+
+      try {
+        await runtime.login(provider, "oauth", { prompt, notify, signal: abort.signal });
         send(controller, { type: "success" });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg !== "Login cancelled") {
+        if (msg !== "Login cancelled" && !abort.signal.aborted) {
           send(controller, { type: "error", message: msg });
         } else {
           send(controller, { type: "cancelled" });

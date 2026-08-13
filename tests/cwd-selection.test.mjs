@@ -6,8 +6,9 @@ import { Script, createContext } from "node:vm";
 async function loadCwdSelectionModule() {
   const source = await readFile(new URL("../lib/cwd-selection.ts", import.meta.url), "utf8");
   const transformed = source
-    .replace(/export interface[\s\S]*?\n}\n/g, "")
-    .replace(/export type[\s\S]*?;\n/g, "")
+    // 兼容 CRLF/LF 两种行尾：Windows 检出为 CRLF 时正则必须容忍 \r
+    .replace(/export interface[\s\S]*?\n}\r?\n/g, "")
+    .replace(/export type[\s\S]*?;\r?\n/g, "")
     .replace(
       /export async function selectCwdWithValidation\([\s\S]*?\): Promise<SelectCwdResult> \{/,
       "async function selectCwdWithValidation(candidatePath, validatePath) {",

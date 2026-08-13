@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-web Bug 修复讲解</title>
+<style>
+  :root{--bd:#2c3440;--bg:#0f1419;--card:#171e27;--tx:#e6edf3;--dim:#8b98a5;--ac:#38bdf8;--ok:#22c55e;--warn:#f59e0b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.6}
+  .wrap{max-width:900px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:24px;margin:0 0 6px}
+  h2{font-size:18px;margin:32px 0 12px;border-left:4px solid var(--ac);padding-left:10px}
+  .lead{font-size:15px;color:var(--dim);margin-bottom:4px}
+  .verdict{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;margin:16px 0}
+  .verdict b{color:var(--ok)}
+  code{background:#0d131a;border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font-size:13px;color:#7dd3fc}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px;margin:12px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;margin-right:6px}
+  .tag.fixed{background:#052e16;color:#22c55e}
+  .tag.notbug{background:#3a2e05;color:#f59e0b}
+  .tag.chore{background:#233;color:#d6dee5}
+  details{border:1px solid var(--bd);border-radius:8px;margin:8px 0;background:#10161d}
+  summary{cursor:pointer;padding:10px 14px;font-weight:600;color:var(--ac)}
+  details pre{background:#0d131a;margin:0;padding:14px;overflow-x:auto;font-size:12.5px;line-height:1.5}
+  .step{margin:8px 0;padding-left:22px;position:relative}
+  .step:before{content:"▸";position:absolute;left:2px;color:var(--ac)}
+  .keep{color:var(--dim)}
+  .btn{cursor:pointer;background:#0d2533;border:1px solid var(--ac);color:var(--ac);border-radius:6px;padding:6px 12px;font-size:13px}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px}
+  th,td{border:1px solid var(--bd);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10161d;color:var(--ac)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>pi-web Bug 修复讲解</h1>
+  <div class="lead">本次修复 8 处，排除 4 处疑似问题（经核实不是 bug）。以下是每处的来龙去脉，给不会写代码的你也能看懂。</div>
+
+  <div class="verdict">
+    <b>一句话结论：</b>修好了一些"可能在特定情况下出错/卡住"的隐患，让程序更稳、测试能真正跑起来；另外有 4 处查证后是"本就这样"，没动它们。
+  </div>
+
+  <h2>生活类比</h2>
+  <div class="card">
+    想象一套"外卖调度台"（pi-web 是 pi 编码助手的前台，负责把大脑和对外的界面连起来）——
+    有时它会在<b>"没人接线时错过一通电话"</b>、<b>"拨号时占线不挂断"</b>、<b>"两单同时来却用了同一张单号"</b>、
+    <b>"帮你自动回拨却静静没打"</b>。本次就是把这几根线理清楚，让该响的响、该挂的挂、该打的打。
+    另有几处检查后发现是"原本设计就如此"，就没乱动。
+  </div>
+
+  <h2>人话链路总览</h2>
+  <div class="card">
+    <div class="step">你在界面操作（选模型、发消息、删文件勾选、新建对话）</div>
+    <div class="step">请求进到后台调度台（lib/ 下的会话管家、钩子）</div>
+    <div class="step">它把话转给 pi 助手大脑，再把大脑的动静推回界面</div>
+    <div class="step">你现在看到的核心修复，都在"转话/推回/排队/下单"这几环</div>
+  </div>
+
+  <h2>修复了哪些（8 处）</h2>
+
+  <div class="card">
+    <span class="tag fixed">已修 B1</span><b>测试终于能跑了</b>
+    <p>原来的测试里有一个跑不起来（缺一个能翻译代码的翻译器），等于那块"防弹窗丢失"的保护逻辑从没被验过。现在给它配上翻译器，并加了统一的 <code>npm test</code> 一键跑全量。是你拍板停掉的一个旧预览服务器占着文件导致装依赖失败，恢复后已正常。</p>
+    <details><summary>看改动代码</summary><pre>
+# package.json
+"test": "node --test \"tests/**/*.test.mjs\" && node --import jiti/register --test \"tests/**/*.test.ts\""
+# 并把 jiti 登记为开发依赖</pre></details>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B2</span><b>切模型时不再"卡死等网络"</b>
+    <p>给大脑换模型时，如果当前列表里一时找不到那个模型，它原来会去<b>联网刷新列表且不设超时</b>——网络一慢就被挂住。现在改为只用本机缓存找，找不到就如实提示，不再干等。</p>
+    <details><summary>看改动代码</summary><pre>
+// lib/rpc-manager.ts
+await runtime.refresh({ allowNetwork: false }); // 之前是 await runtime.refresh()（联网、无超时）
+</pre></details>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B3</span><b>"自动重试"看清最新状态</b>
+    <p>大脑报错后界面想自动补一句"继续"。原来它握的是<u>很久以前的快照</u>，可能把话发错地方。现在改成实时拿最新状态再发。</p>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B4</span><b>"自动继续"真正发得出去</b>
+    <p>发那句"继续"时，界面仍以为大脑还在忙，于是一句"你忙，我先不打扰"把它拦下——结果是静默不重试。现在明确放行这次的自动重试。</p>
+    <details><summary>看改动代码</summary><pre>
+// hooks/useAgentSession.ts
+handleSendRef.current?.("继续", undefined, { bypassRunning: true });
+// handleSend 签名加 opts，守卫改为：if (agentRunning && !opts?.bypassRunning) return;
+</pre></details>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B6</span><b>启动失败时不"漏个孤儿"</b>
+    <p>建对话时若挂扩展组件失败，原来会留下一个没登记、没关闭的残留会话（占着日志文件）。现在失败就主动关闭清理，再报错。</p>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B7</span><b>新会话单号不再撞车</b>
+    <p>几乎同时开两个新会话时，原来可能撞上同一个毫秒时间戳，两人拿到同一张"单"（用错目录）。现在每单用唯一随机号。</p>
+  </div>
+
+  <div class="card">
+    <span class="tag fixed">已修 B11</span><b>顺手删一行没用的代码</b>
+    <p>Git 面板里有一个算了但没用的变量，纯属冗余，删掉。</p>
+  </div>
+
+  <h2>查证后"不是 bug、没动"（4 处）</h2>
+  <div class="card">
+    <span class="tag notbug">排除 B5</span> 小挂件逻辑：官方契约里它本来就只收"数组或空"，不是漏了字符串。<br>
+    <span class="tag notbug">排除 B8</span> 界面其实根本没读那个"写死 0"的字段，不影响任何显示。<br>
+    <span class="tag notbug">排除 B9</span> 编辑器让用户长时间写内容时不该被超时打断，属于设计。<br>
+    <span class="tag notbug">排除 B10</span> 一个纯重复计算的性能小点，结果一样，不改。
+  </div>
+
+  <h2>怎么亲手验证</h2>
+  <div class="card">
+    <p>命令层面（最直接）：</p>
+    <code>npm test</code> → 应看到 19 个 + 1 个全部通过<br>
+    <code>node_modules/.bin/tsc --noEmit</code> → 无输出（无类型错误）<br><br>
+    <p>运行层面（可选）：</p>
+    <ol style="margin:6px 0;padding-left:20px">
+      <li>在联网慢/离线环境切换一个模型，应<b>很快返回"找不到模型"</b>而不是卡住。</li>
+      <li>让模型接口故意报错，观察是否<b>真的自动发出"继续"</b>重试。</li>
+      <li>几乎同时点两次"新对话"，应生成<b>两个不同会话</b>、各自目录正确。</li>
+    </ol>
+  </div>
+
+  <h2>没动什么 / 边界</h2>
+  <div class="card keep">
+    <ul style="margin:0;padding-left:18px">
+      <li>未触碰认证/授权逻辑的行为本身（只防了卡死）。</li>
+      <li>GitPanel 里本就在的若干 <code>any</code> 类型提示、缺失依赖警告，均为原有问题，按"只修本次范围"未动。</li>
+      <li>因副作用的传入点（session runtime）难被自动化直接冒烟，B2/B3/B4/B6 主要靠类型检查 + 代码审查 + 契约核对兜底，已如实记录该 TDD 局限。</li>
+    </ul>
+  </div>
+
+  <h2>验证事实（真实跑过）</h2>
+  <div class="card">
+    <table>
+      <tr><th>检查</th><th>结果</th></tr>
+      <tr><td>恢复 node_modules（typeScript/jiti/patch-package 重装）</td><td>✔ 完成，0.81.1 patch 重新应用</td></tr>
+      <tr><td><code>tsc --noEmit</code></td><td>✔ 通过</td></tr>
+      <tr><td><code>npm test</code></td><td>✔ 19 mjs + 1 ts 全过</td></tr>
+      <tr><td>触碰文件 lint（本次改动是否新增问题）</td><td>✔ 未新增（其余为既有问题）</td></tr>
+    </table>
+  </div>
+</div>
+</body>
+</html>

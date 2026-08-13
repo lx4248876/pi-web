@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startRpcSession } from "@/lib/rpc-manager";
+// 用相对路径导入：jiti 不解析 tsconfig 的 @/ 别名
+import { startRpcSession } from "../lib/rpc-manager";
 
 test("extension_ui_request dialog is buffered and replayed when listener connects late", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-web-test-"));
