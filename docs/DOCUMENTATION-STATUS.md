@@ -7,6 +7,9 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | `docs/README.md` | ✅ 完成 | 文档目录和导航 |
+| `docs/development.md` | ✅ 完成 | 开发与调试指南（命令/测试/调试产物目录） |
+| `docs/bug-audit-report.md` | ✅ 完成 | 全面 bug 排查报告（含修复状态） |
+| `docs/change-explainers/2026-08-13-bug-fixes.html` | ✅ 完成 | 修复讲解页 |
 | `docs/hashline.md` | ✅ 完成 | Hashline 编辑系统使用指南 |
 | `docs/hashline-integration-complete.md` | ✅ 完成 | Hashline 集成完成文档 |
 | `docs/safe-edit.md` | ✅ 完成 | 安全编辑系统使用指南 |
@@ -27,6 +30,9 @@ pi-web/
 ├── README.md                           # 项目概述
 └── docs/
     ├── README.md                       # 文档目录
+    ├── development.md                  # 开发与调试指南
+    ├── bug-audit-report.md             # 全面 bug 排查报告
+    ├── change-explainers/              # 修复讲解页
     ├── hashline.md                     # Hashline 使用指南
     ├── hashline-integration-complete.md # Hashline 集成完成
     ├── safe-edit.md                    # 安全编辑使用指南

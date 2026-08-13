@@ -6,6 +6,7 @@
 |------|------|
 | [AGENTS.md](../AGENTS.md) | 架构文档，系统设计和生命周期 |
 | [README.md](../README.md) | 项目概述和快速开始 |
+| [development.md](development.md) | 开发与调试指南（测试/类型检查/调试产物目录） |
 
 ## 🔧 功能文档
 
@@ -29,6 +30,13 @@
 | [error-handling.md](error-handling.md) | 聊天错误提示（余额不足/限流/鉴权/网络） |
 | [git-panel.md](git-panel.md) | Git 面板设计文档 |
 | [sidebar-design.md](sidebar-design.md) | 侧边栏设计文档 |
+
+## 🗂 排查与修复
+
+| 文档 | 说明 |
+|------|------|
+| [bug-audit-report.md](bug-audit-report.md) | 全面 bug 排查报告（含修复状态） |
+| [change-explainers/](change-explainers/) | 修复讲解页（外行可读，含折叠代码） |
 
 ## 🗺️ 规划文档
 

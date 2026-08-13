@@ -7,7 +7,13 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Dev server: `npm run dev` (Next.js on port 3030).
 - Type check: `node_modules/.bin/tsc --noEmit`.
 - Lint: `npm run lint`.
+- Tests: `npm test`（原生 `.mjs` + 经 jiti 的 `.ts`；新增 `.ts` 测试需 `node --import jiti/register --test`）。
 - Do not run `next build` during normal local agent work. It writes `.next/` output that can confuse hot reload and local path resolution.
+
+## Debug Artifacts
+
+- 所有调试/验证产物（日志、截图、UI 录制 yml、验证报告等）统一写到根目录 `debug/`（已 gitignore，不入库）。
+- 工具运行时目录 `.pi-subagents/ .playwright-cli/ .web-verify/` 为 harness/浏览器/验证工具自动生成，已 gitignore，勿手工清理（工具可能依赖它们）。
 
 ## Search Discipline
 

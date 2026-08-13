@@ -68,3 +68,12 @@ next-env.d.ts
 /.playwright-cli/page-2026-07-01T03-49-34-219Z.yml
 /.playwright-cli/page-2026-07-01T03-53-37-106Z.yml
 /.playwright-cli/page-2026-07-01T03-57-14-076Z.yml
+
+# ---------- 调试产物(统一放 /debug, 已忽略) ----------
+/debug/
+# 工具运行时目录(harness/浏览器/验证工具自动生成)
+/.pi-subagents/
+/.playwright-cli/
+/.web-verify/
+# 杂项缓存
+/.ruff_cache/
