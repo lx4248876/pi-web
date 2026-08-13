@@ -255,11 +255,11 @@ function Select({ value, onChange, options, required }: { value: string; onChang
   );
 }
 
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function Check({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 13, height: 13, accentColor: "var(--accent)", cursor: "pointer" }} />
+    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer", fontSize: 12, color: "var(--text-muted)", opacity: disabled ? 0.55 : 1 }}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} disabled={disabled}
+        style={{ width: 13, height: 13, accentColor: "var(--accent)", cursor: disabled ? "not-allowed" : "pointer" }} />
       {label}
     </label>
   );
@@ -392,146 +392,6 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
   );
 }
 
-// ── ThinkingLevelMap editor ───────────────────────────────────────────────────
-
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-type ThinkingLevel = typeof THINKING_LEVELS[number];
-
-const LEVEL_COLORS: Record<ThinkingLevel, string> = {
-  off:     "var(--text-dim)",
-  minimal: "#6b7280",
-  low:     "#60a5fa",
-  medium:  "#a78bfa",
-  high:    "#f472b6",
-  xhigh:   "#fb923c",
-};
-
-function ThinkingLevelMapEditor({
-  value,
-  onChange,
-}: {
-  value: Record<string, string | null> | undefined;
-  onChange: (v: Record<string, string | null> | undefined) => void;
-}) {
-  const map = value ?? {};
-
-  const setLevel = (level: ThinkingLevel, entry: string | null | "omit") => {
-    const next = { ...map };
-    if (entry === "omit") {
-      delete next[level];
-    } else {
-      next[level] = entry;
-    }
-    onChange(Object.keys(next).length ? next : undefined);
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      {THINKING_LEVELS.map((level) => {
-        const raw = map[level];
-        const state: "omit" | "null" | "string" =
-          !(level in map) ? "omit" : raw === null ? "null" : "string";
-        const strVal = typeof raw === "string" ? raw : "";
-        const color = LEVEL_COLORS[level];
-
-        const btnBase: React.CSSProperties = {
-          padding: "4px 10px",
-          fontSize: 10,
-          border: "none",
-          cursor: "pointer",
-          fontWeight: 400,
-          transition: "background 0.1s, color 0.1s",
-          whiteSpace: "nowrap",
-          background: "var(--bg-panel)",
-          color: "var(--text-dim)",
-        };
-        const btnActive: React.CSSProperties = {
-          background: "var(--accent)",
-          color: "#fff",
-          fontWeight: 600,
-        };
-        const btnActiveDisabled: React.CSSProperties = {
-          background: "#ef4444",
-          color: "#fff",
-          fontWeight: 600,
-        };
-
-        return (
-          <div
-            key={level}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "5px 4px",
-              borderRadius: 6,
-              background: "transparent",
-              border: "1px solid transparent",
-            }}
-          >
-            {/* Level badge */}
-            <div style={{ display: "flex", alignItems: "center", gap: 5, width: 68, flexShrink: 0 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0, opacity: state === "null" ? 0.3 : 1 }} />
-              <span style={{
-                fontSize: 11,
-                fontFamily: "var(--font-mono)",
-                color: state === "null" ? "var(--text-dim)" : "var(--text-muted)",
-                textDecoration: state === "null" ? "line-through" : "none",
-              }}>
-                {level}
-              </span>
-            </div>
-
-            {/* Default + Disabled buttons */}
-            <div style={{ display: "flex", borderRadius: 5, border: "1px solid var(--border)", overflow: "hidden", flexShrink: 0 }}>
-              <button
-                onClick={() => setLevel(level, "omit")}
-                style={{ ...btnBase, ...(state === "omit" ? btnActive : {}) }}
-              >
-                Default
-              </button>
-              <button
-                onClick={() => setLevel(level, null)}
-                style={{ ...btnBase, borderLeft: "1px solid var(--border)", ...(state === "null" ? btnActiveDisabled : {}) }}
-              >
-                Disabled
-              </button>
-            </div>
-
-            {/* Custom button + input fused */}
-            <div style={{ display: "flex", borderRadius: 5, border: `1px solid ${state === "string" ? "var(--accent)" : "var(--border)"}`, overflow: "hidden", transition: "border-color 0.1s" }}>
-              <button
-                onClick={() => setLevel(level, strVal || level)}
-                style={{ ...btnBase, ...(state === "string" ? btnActive : {}), borderRight: "1px solid var(--border)", flexShrink: 0 }}
-              >
-                Custom
-              </button>
-              <input
-                value={strVal}
-                onChange={(e) => setLevel(level, e.target.value)}
-                onFocus={() => { if (state !== "string") setLevel(level, strVal || level); }}
-                placeholder={level}
-                maxLength={10}
-                style={{
-                  width: "12ch",
-                  background: state === "string" ? "var(--bg)" : "var(--bg-panel)",
-                  border: "none",
-                  outline: "none",
-                  color: state === "string" ? "var(--text)" : "var(--text-dim)",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  padding: "4px 7px",
-                  transition: "background 0.1s, color 0.1s",
-                }}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── Model detail ──────────────────────────────────────────────────────────────
 
 const DEEPSEEK_COMPAT = {
@@ -554,6 +414,22 @@ function setDeepseekCompat(model: ModelEntry, enabled: boolean): ModelEntry {
   return { ...model, compat: Object.keys(rest).length ? rest : undefined };
 }
 
+// 部分转发网关（如 dgrid）不识别 OpenAI 的 developer role（会 500 get_channel_failed），
+// 显式设 supportsDeveloperRole:false 让 pi-ai 走标准 system role。
+function usesStandardSystemRole(model: ModelEntry): boolean {
+  return model.compat?.supportsDeveloperRole === false;
+}
+
+function setSystemRoleCompat(model: ModelEntry, enabled: boolean): ModelEntry {
+  if (enabled) {
+    return { ...model, compat: { ...(model.compat ?? {}), supportsDeveloperRole: false } };
+  }
+  if (!model.compat) return model;
+  const rest = { ...model.compat };
+  delete rest.supportsDeveloperRole;
+  return { ...model, compat: Object.keys(rest).length ? rest : undefined };
+}
+
 function ModelDetail({
   providerName,
   provider,
@@ -569,6 +445,11 @@ function ModelDetail({
 }) {
   const [testState, setTestState] = useState<ModelTestState>({ phase: "idle" });
   const set = <K extends keyof ModelEntry>(k: K, v: ModelEntry[K]) => onChange({ ...model, [k]: v });
+  // 生效的 API 类型 = 模型级 override ?? 供应商级 ?? SDK 默认。
+  // DeepSeek compat(thinkingFormat) 只在 openai-completions 实现里被读取，
+  // 其它 API(如 openai-responses) 走各自的 reasoning 字段，勾了也不生效 ——
+  // 这里按它做联动，避免出现“选了 response 却困惑为什么不勾选”的情况。
+  const effectiveApi = model.api ?? provider.api ?? "openai-completions";
   const costVal = (k: keyof NonNullable<ModelEntry["cost"]>) => model.cost?.[k] !== undefined ? String(model.cost[k]) : "";
   const setCost = (k: keyof NonNullable<ModelEntry["cost"]>, v: string) => {
     const n = parseFloat(v);
@@ -710,23 +591,31 @@ function ModelDetail({
             label="DeepSeek thinking compat"
             checked={hasDeepseekCompat(model)}
             onChange={(v) => onChange(setDeepseekCompat(model, v))}
+            disabled={effectiveApi !== "openai-completions"}
           />
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <SectionTitle>Thinking level map</SectionTitle>
-              {model.thinkingLevelMap && (
-                <button
-                  onClick={() => set("thinkingLevelMap", undefined)}
-                  style={{ fontSize: 10, padding: "2px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-dim)", cursor: "pointer" }}
-                >
-                  clear all
-                </button>
-              )}
-            </div>
-            <ThinkingLevelMapEditor
-              value={model.thinkingLevelMap}
-              onChange={(v) => set("thinkingLevelMap", v)}
+          {effectiveApi !== "openai-completions" ? (
+            <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+              API 类型为 <code style={{ fontFamily: "var(--font-mono)" }}>{effectiveApi}</code> 时，SDK
+              按该 API 的 reasoning 字段处理，不读取 DeepSeek 兼容配置
+              {hasDeepseekCompat(model) ? "（当前已勾选但不会生效）" : ""}，故此处不可勾选。
+            </p>
+          ) : (
+            hasDeepseekCompat(model) && (
+              <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+                DeepSeek 兼容用于解析供应商返回的推理内容（reasoning_content）；它与网关报错无关，去掉会导致推理过程无法在对话中渲染。
+              </p>
+            )
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
+            <Check
+              label="Use 'system' role (not 'developer')"
+              checked={usesStandardSystemRole(model)}
+              onChange={(v) => onChange(setSystemRoleCompat(model, v))}
             />
+            <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+              部分转发网关（如 dgrid）不识别 OpenAI 的 developer role，会返回{" "}
+              <code style={{ fontFamily: "var(--font-mono)" }}>get_channel_failed</code>；勾选后改用标准 system role，此类渠道即可正常。
+            </p>
           </div>
         </>
       )}
@@ -1378,7 +1267,10 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const addModel = useCallback((providerName: string) => {
     setConfig((prev) => {
       const provider = prev.providers?.[providerName] ?? {};
-      const models = [...(provider.models ?? []), { id: "" }];
+      // 自定义 provider（relay 网关）多数不识别 OpenAI 的 developer role，
+      // 新模型默认走标准 system role（compat.supportsDeveloperRole:false），
+      // 避免 dgrid 这类渠道一加就用不了；支持 developer 的官方渠道仍可在面板取消勾选。
+      const models = [...(provider.models ?? []), { id: "", compat: { supportsDeveloperRole: false } }];
       return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models } } };
     });
     setConfig((prev) => {

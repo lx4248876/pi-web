@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import {Prism as SyntaxHighlighter} from "react-syntax-highlighter";
 import {vs, vscDarkPlus} from "react-syntax-highlighter/dist/cjs/styles/prism";
 import {useTheme} from "@/hooks/useTheme";
+import {parseModelError, friendlyModelErrorHint} from "@/lib/model-error";
 import type {
     AgentMessage,
     AssistantContentBlock,
@@ -742,7 +743,7 @@ function AssistantMessageView({
             {!isStreaming &&
                 message.stopReason === "error" &&
                 message.errorMessage && (
-                    <ErrorBanner rawMessage={message.errorMessage}/>
+                    <ErrorBanner message={message}/>
                 )}
 
             <div
@@ -834,29 +835,29 @@ function AssistantMessageView({
     );
 }
 
-function ErrorBanner({ rawMessage }: { rawMessage: string }) {
-    // 把底层错误归类成用户能看懂的中文提示；保留原始信息供排查。
-    const lower = rawMessage.toLowerCase();
-    let hint: string;
-    if (
-        /insufficient|balance|quota|credit|payment|余额|额度|欠费|arrears|402/.test(
-            lower,
-        ) ||
-        rawMessage.includes("余额")
-    ) {
-        hint =
-            "当前模型账户余额不足或额度用尽，请充值后重试，或在右上角切换到其它可用模型。";
-    } else if (/rate.?limit|too many requests|429/.test(lower)) {
-        hint = "请求过于频繁，已被服务方限流。请稍候片刻再试。";
-    } else if (/unauthor|invalid.*key|api.?key|forbidden|401|403/.test(lower)) {
-        hint = "鉴权失败，API Key 可能无效或已过期。请在模型配置中检查密钥。";
-    } else if (
-        /timeout|timed out|econnreset|network|fetch failed|enotfound/.test(lower)
-    ) {
-        hint = "网络异常或请求超时，请检查网络后重试。";
-    } else {
-        hint = "模型请求失败。";
-    }
+function ErrorBanner({ message }: { message: AssistantMessage }) {
+    // 把底层错误归类成用户能看懂的中文提示；保留完整信息供排查。
+    // 解析逻辑集中在 lib/model-error.ts，避免在多处维护正则分类。
+    const raw = message.errorMessage ?? "";
+    const parsed = parseModelError(raw);
+    const hint = friendlyModelErrorHint(parsed, raw);
+    const statusLine = [
+        parsed.status !== undefined ? `HTTP ${parsed.status}` : null,
+        parsed.code ?? null,
+        // JSON 里 error 字段即错误码时（如 {"error":"internal_server_error"}）message 与 code 相同，去重
+        parsed.message && parsed.message !== raw && parsed.message !== parsed.code
+            ? parsed.message
+            : null,
+    ]
+        .filter(Boolean)
+        .join(" · ");
+    const metaLine = [
+        message.provider,
+        message.model,
+        formatTime(message.timestamp),
+    ]
+        .filter(Boolean)
+        .join(" · ");
 
     return (
         <div
@@ -869,6 +870,9 @@ function ErrorBanner({ rawMessage }: { rawMessage: string }) {
                 color: "#ef4444",
                 fontSize: 13,
                 lineHeight: 1.6,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
             }}
         >
             <div
@@ -877,7 +881,6 @@ function ErrorBanner({ rawMessage }: { rawMessage: string }) {
                     alignItems: "center",
                     gap: 6,
                     fontWeight: 600,
-                    marginBottom: 4,
                 }}
             >
                 <svg
@@ -895,18 +898,37 @@ function ErrorBanner({ rawMessage }: { rawMessage: string }) {
                     <line x1="12" y1="16" x2="12.01" y2="16"/>
                 </svg>
                 请求失败
+                {statusLine && (
+                    <span
+                        style={{fontWeight: 400, fontSize: 12, opacity: 0.75}}
+                    >
+                        {statusLine}
+                    </span>
+                )}
             </div>
             <div style={{color: "var(--text)"}}>{hint}</div>
+            {metaLine && (
+                <div
+                    style={{
+                        fontSize: 11,
+                        color: "var(--text-dim)",
+                        opacity: 0.85,
+                    }}
+                >
+                    {metaLine}
+                </div>
+            )}
             <div
                 style={{
-                    marginTop: 6,
+                    marginTop: 2,
                     fontSize: 11,
                     color: "var(--text-dim)",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
+                    opacity: 0.85,
                 }}
             >
-                {rawMessage}
+                {raw}
             </div>
         </div>
     );

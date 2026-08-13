@@ -164,15 +164,6 @@ export interface UseAgentSessionOptions {
 	setToolPreset?: (preset: "none" | "default" | "full") => void;
 }
 
-export type ThinkingLevelOption =
-	| "auto"
-	| "off"
-	| "minimal"
-	| "low"
-	| "medium"
-	| "high"
-	| "xhigh";
-
 export interface ChatInputHandle {
 	insertText: (text: string) => void;
 	insertIfEmpty: (content: string) => void;
@@ -217,9 +208,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	const [modelThinkingLevels, setModelThinkingLevels] = useState<
 		Record<string, string[]>
 	>({});
-	const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<
-		Record<string, Record<string, string | null>>
-	>({});
 	const [newSessionModel, setNewSessionModelState] = useState<{
 		provider: string;
 		modelId: string;
@@ -227,8 +215,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(
 		"full",
 	);
-	const [thinkingLevel, setThinkingLevel] =
-		useState<ThinkingLevelOption>("auto");
 	const [retryInfo, setRetryInfo] = useState<{
 		attempt: number;
 		maxAttempts: number;
@@ -362,14 +348,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				setEntryIds(d.context.entryIds ?? []);
 				setCurrentModelOverride(null);
 				setError(null);
-				// If no live agent state, fall back to thinking level from session file
-				if (
-					!d.agentState?.state?.thinkingLevel &&
-					d.context.thinkingLevel &&
-					d.context.thinkingLevel !== "off"
-				) {
-					setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
-				}
 				return d.agentState ?? null;
 			} catch (e) {
 				setError(String(e));
@@ -736,6 +714,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				if (isNew && newSessionCwd) {
 					const selectedModel = newSessionModel;
 					if (selectedModel) setPendingModel(selectedModel);
+					const maxThinkingLevel = selectedModel
+						? modelThinkingLevels[
+								`${selectedModel.provider}:${selectedModel.modelId}`
+							]
+						: undefined;
+					// thinking 开关打开（模型支持推理）时取该模型最高档；否则不传
+					const sendableLevel =
+						maxThinkingLevel && maxThinkingLevel.length > 1
+							? maxThinkingLevel[maxThinkingLevel.length - 1]
+							: undefined;
 					const { PRESET_NONE, PRESET_DEFAULT, PRESET_FULL } = await import(
 						"@/components/ToolPanel"
 					);
@@ -758,7 +746,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 										modelId: selectedModel.modelId,
 									}
 								: {}),
-							...(thinkingLevel !== "auto" ? { thinkingLevel } : {}),
+							...(sendableLevel ? { thinkingLevel: sendableLevel } : {}),
 						}),
 					});
 					if (!res.ok) {
@@ -810,7 +798,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			newSessionCwd,
 			newSessionModel,
 			toolPreset,
-			thinkingLevel,
+			modelThinkingLevels,
 			session,
 			agentRunning,
 			connectEvents,
@@ -1022,21 +1010,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		[pendingUiRequest?.id],
 	);
 
-	const handleThinkingLevelChange = useCallback(
-		async (level: ThinkingLevelOption) => {
-			setThinkingLevel(level);
-			if (level === "auto") return; // "auto" leaves pi's current setting untouched
-			const sid = sessionIdRef.current;
-			if (!sid) return;
-			try {
-				await sendAgentCommand(sid, { type: "set_thinking_level", level });
-			} catch (e) {
-				console.error("Failed to set thinking level:", e);
-			}
-		},
-		[],
-	);
-
 	const handleToolPresetChange = useCallback(
 		async (preset: "none" | "default" | "full") => {
 			const { PRESET_NONE, PRESET_DEFAULT, PRESET_FULL } = await import(
@@ -1102,10 +1075,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 						setContextUsage(agentState.state.contextUsage ?? null);
 					if (agentState.state.systemPrompt !== undefined)
 						setSystemPrompt(agentState.state.systemPrompt ?? null);
-					if (agentState.state.thinkingLevel !== undefined)
-						setThinkingLevel(
-							(agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto",
-						);
 				}
 			});
 		}
@@ -1156,12 +1125,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 					modelList?: { id: string; name: string; provider: string }[];
 					defaultModel?: { provider: string; modelId: string } | null;
 					thinkingLevels?: Record<string, string[]>;
-					thinkingLevelMaps?: Record<string, Record<string, string | null>>;
 				}) => {
 					setModelNames(d.models);
 					if (d.thinkingLevels) setModelThinkingLevels(d.thinkingLevels);
-					if (d.thinkingLevelMaps)
-						setModelThinkingLevelMaps(d.thinkingLevelMaps);
 					if (d.modelList) {
 						setModelList(d.modelList);
 						if (isNew && d.modelList.length > 0) {
@@ -1213,10 +1179,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		modelNames,
 		modelList,
 		modelThinkingLevels,
-		modelThinkingLevelMaps,
 		newSessionModel,
 		toolPreset,
-		thinkingLevel,
 		retryInfo,
 		contextUsage,
 		systemPrompt,
@@ -1252,7 +1216,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		handleFollowUp,
 		handleAbortCompaction,
 		handleToolPresetChange,
-		handleThinkingLevelChange,
 		loadTools,
 		setActiveLeafId,
 		setData,

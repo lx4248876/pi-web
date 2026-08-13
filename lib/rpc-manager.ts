@@ -328,6 +328,39 @@ export class AgentSessionWrapper {
 		return this._alive;
 	}
 
+	/**
+	 * Reload model providers from the persisted models.json config.
+	 *
+	 * 会话创建时 ModelRuntime 只加载了一次 models.json 快照；用户在模型配置面板里
+	 * 新增/修改/删除供应商后，运行中的会话不会自动感知。这里重新读取 models.json
+	 * 并重建 provider 注册表，让新模型立即可用。
+	 *
+	 * reloadConfig() 内部 refresh 默认 allowNetwork=true（可能联网拉内置模型目录），
+	 * 实测本环境约 270ms；加 8s 兜底超时，避免离线/受限环境把切模型请求无限挂起。
+	 */
+	async reloadModelConfig(): Promise<void> {
+		const runtime = this.inner.modelRuntime;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				runtime.reloadConfig(),
+				new Promise<never>((_resolve, reject) => {
+					timer = setTimeout(
+						() =>
+							reject(
+								new Error(
+									`Model config reload timed out after 8000ms (provider registry unchanged)`,
+								),
+							),
+						8000,
+					);
+				}),
+			]);
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
+	}
+
 	start(): void {
 		this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
 			this.resetIdleTimer();
@@ -827,17 +860,16 @@ export class AgentSessionWrapper {
 					provider: string;
 					modelId: string;
 				};
-				// 0.81.1：modelRegistry → modelRuntime（getModel + refresh）
+				// 0.81.1：modelRegistry → modelRuntime（getModel + reloadConfig）
 				const runtime = this.inner.modelRuntime;
 				let model = runtime.getModel(provider, modelId);
 				if (!model) {
-					// Model not found in the cached registry. Refresh from the offline local store
-					// (models.json / models-store) in case it was newly added. Deliberately do NOT
-					// pass allowNetwork here: `refresh()` defaults to allowNetwork=true (an unbounded,
-					// awaited, network-fetching call with no timeout), which can hang the model-switch
-					// request in offline/blocked environments. Cloud models already present in the
-					// runtime snapshot are returned by getModel without ever reaching this path.
-					await runtime.refresh({ allowNetwork: false });
+					// 会话创建时 runtime 持有的是当时的 models.json 快照；用户随后在模型配置
+					// 面板新增/修改/删除供应商不会反映到运行中的会话，导致这里找不到模型。
+					// reloadConfig() 重读 models.json 并重建注册表（新增/删除/改名都能生效），
+					// 比 refresh({allowNetwork:false}) 只刷新已注册 provider 的目录更彻底。
+					// 8s 兜底超时见 reloadModelConfig()。
+					await this.reloadModelConfig();
 					model = runtime.getModel(provider, modelId);
 				}
 				if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
@@ -1063,6 +1095,37 @@ export function getRpcSession(
 	sessionId: string,
 ): AgentSessionWrapper | undefined {
 	return getRegistry().get(sessionId);
+}
+
+/**
+ * Reload the persisted models.json config into every running session.
+ *
+ * 模型配置面板保存（/api/models-config PUT）后调用：让所有会话即使正在运行，
+ * 也能立刻用上新添加/修改/删除的供应商与模型，无需重启或重开会话。
+ * 串行执行（会话数量不多），单个会话失败不影响其余会话；返回统计供调用方提示。
+ */
+export async function reloadAllSessionModelConfigs(): Promise<{
+	ok: number;
+	failed: string[];
+}> {
+	const registry = getRegistry();
+	const failed: string[] = [];
+	let ok = 0;
+	for (const [sessionId, wrapper] of registry) {
+		try {
+			if (wrapper.isAlive()) {
+				await wrapper.reloadModelConfig();
+				ok++;
+			}
+		} catch (err) {
+			console.error(
+				`[rpc-manager] reload model config failed for session ${sessionId}:`,
+				err,
+			);
+			failed.push(sessionId);
+		}
+	}
+	return { ok, failed };
 }
 
 /**
