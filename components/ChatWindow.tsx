@@ -159,18 +159,43 @@ function ExtensionUIDialog({
         onResponse({type: "extension_ui_response", id: request.id, value});
 
     return (
-        <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/25 px-4 backdrop-blur-[2px]">
+        <div
+            style={{
+                padding: "0 16px 8px",
+                paddingRight: 52, // 16px base + 36px for ChatMinimap alignment
+                flexShrink: 0,
+            }}
+        >
+            <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <div
-                className="w-full max-w-[460px]"
                 style={{
-                    background: "var(--bg)",
+                    background: "var(--bg-panel)",
                     border: "1px solid var(--border)",
-                    borderRadius: 8,
-                    boxShadow: "0 18px 50px rgba(0,0,0,0.22)",
+                    borderTop: "2px solid var(--accent)",
+                    borderRadius: 10,
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.18)",
                     padding: 16,
                 }}
             >
-                <div className="mb-3 text-[15px] font-semibold text-text">
+                <div
+                    className="mb-3 flex items-center gap-2 text-[15px] font-semibold"
+                    style={{ color: "var(--text)" }}
+                >
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--accent)"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0 }}
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
                     {request.title}
                 </div>
 
@@ -186,7 +211,7 @@ function ExtensionUIDialog({
                                         value: option,
                                     })
                                 }
-                                className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-panel)]"
+                                className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-hover)]"
                                 style={{
                                     border: "1px solid var(--border)",
                                     borderRadius: 6,
@@ -218,7 +243,7 @@ function ExtensionUIDialog({
                         }}
                         className="w-full text-sm outline-none"
                         style={{
-                            background: "var(--bg-panel)",
+                            background: "var(--bg)",
                             border: "1px solid var(--border)",
                             borderRadius: 6,
                             color: "var(--text)",
@@ -239,7 +264,7 @@ function ExtensionUIDialog({
                         rows={8}
                         className="w-full resize-none text-sm outline-none"
                         style={{
-                            background: "var(--bg-panel)",
+                            background: "var(--bg)",
                             border: "1px solid var(--border)",
                             borderRadius: 6,
                             color: "var(--text)",
@@ -251,7 +276,7 @@ function ExtensionUIDialog({
                 <div className="mt-4 flex justify-end gap-2">
                     <button
                         onClick={cancel}
-                        className="text-sm transition-colors hover:bg-[var(--bg-panel)]"
+                        className="text-sm transition-colors hover:bg-[var(--bg-hover)]"
                         style={{
                             border: "1px solid var(--border)",
                             borderRadius: 6,
@@ -319,6 +344,7 @@ function ExtensionUIDialog({
                 </div>
             </div>
         </div>
+    </div>
     );
 }
 
@@ -662,13 +688,6 @@ export function ChatWindow({
                 </div>
             )}
 
-            {pendingUiRequest && (
-                <ExtensionUIDialog
-                    request={pendingUiRequest}
-                    onResponse={handleExtensionUIResponse}
-                />
-            )}
-
             {isEmptyNew ? (
                 <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
                     <div className="w-full max-w-[820px]">
@@ -997,6 +1016,12 @@ export function ChatWindow({
                                     Close
                                 </button>
                             </div>
+                        )}
+                        {pendingUiRequest && (
+                            <ExtensionUIDialog
+                                request={pendingUiRequest}
+                                onResponse={handleExtensionUIResponse}
+                            />
                         )}
                         {chatInputElement}
                     </div>

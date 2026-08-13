@@ -577,7 +577,7 @@ export function GitPanel({ cwd }: Props) {
       {error && (
         <div style={{ padding: "6px 10px", fontSize: 11, color: "#ef4444", background: "rgba(239,68,68,0.06)", borderBottom: "1px solid rgba(239,68,68,0.15)", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{error}</span>
-          <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}>×</button>
+          <button onClick={() => setError(null)} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "flex", alignItems: "center", padding: 0, lineHeight: 1 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       )}
 
@@ -607,7 +607,7 @@ export function GitPanel({ cwd }: Props) {
                 >Push</button>
                 <button onClick={() => setShowForcePushBtn(!showForcePushBtn)}
                   style={{ fontSize: 8, padding: "2px 3px", background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.22)", borderLeft: "none", borderRadius: "0 4px 4px 0", cursor: "pointer", color: "var(--accent)" }}
-                >▼</button>
+                ><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
                 {showForcePushBtn && (
                   <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, zIndex: 300, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 5, boxShadow: "0 4px 10px rgba(0,0,0,0.15)", padding: 4, minWidth: 80 }}>
                     <button onClick={() => { setShowForcePushBtn(false); if (confirm("确定强制覆盖远端仓库？")) handlePush(true); }}
@@ -797,7 +797,7 @@ export function GitPanel({ cwd }: Props) {
                 />
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 8px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
                   <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{selectedCommitHash}</span>
-                  <button onClick={() => setSelectedCommitHash(null)} style={{ padding: 0, width: 16, height: 16, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>
+                  <button onClick={() => setSelectedCommitHash(null)} style={{ padding: 0, width: 16, height: 16, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 </div>
                 <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", scrollbarWidth: "thin" }}>
                   {commitFilesLoading ? (

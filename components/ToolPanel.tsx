@@ -18,7 +18,7 @@ export function getPresetFromTools(tools: ToolEntry[]): ToolPreset {
   if (active === "") return "none";
   if (active === [...PRESET_DEFAULT].sort().join(",")) return "default";
   if (active === [...PRESET_FULL].sort().join(",")) return "full";
-  return "default"; // closest match
+  return "full"; // closest match
 }
 
 interface Props {

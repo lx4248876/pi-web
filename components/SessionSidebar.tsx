@@ -309,6 +309,9 @@ export function SessionSidebar({
 		null,
 	);
 
+	// Project being confirmed for hide/close — shows a confirmation dialog before removal
+	const [confirmHideCwd, setConfirmHideCwd] = useState<string | null>(null);
+
 	// Hidden project paths state helper
 	const [hiddenCwds, setHiddenCwds] = useState<Record<string, boolean>>(() => {
 		if (typeof window !== "undefined") {
@@ -973,7 +976,19 @@ export function SessionSidebar({
 											: "Already at root"
 									}
 								>
-									↑
+									<svg
+										width="14"
+										height="14"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2.5"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										style={{ flexShrink: 0 }}
+									>
+										<polyline points="18 15 12 9 6 15" />
+									</svg>
 								</button>
 								{browseIsEditingPath ? (
 									<input
@@ -1671,9 +1686,9 @@ export function SessionSidebar({
 									<button
 										onClick={(e) => {
 											e.stopPropagation();
-											hideProjectCwd(cwd);
+											setConfirmHideCwd(cwd);
 										}}
-										title="Hide this project from workspace"
+										title="Close this project from workspace"
 										style={{
 											background: "none",
 											border: "none",
@@ -1696,7 +1711,18 @@ export function SessionSidebar({
 											e.currentTarget.style.background = "none";
 										}}
 									>
-										×
+										<svg
+											width="11"
+											height="11"
+											viewBox="0 0 12 12"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2.2"
+											strokeLinecap="round"
+										>
+											<line x1="1.5" y1="1.5" x2="10.5" y2="10.5" />
+											<line x1="10.5" y1="1.5" x2="1.5" y2="10.5" />
+										</svg>
 									</button>
 								</div>
 							</div>
@@ -1980,6 +2006,106 @@ export function SessionSidebar({
 							/>
 						</div>
 					)}
+				</div>
+			)}
+
+			{/* Close-project confirmation dialog */}
+			{confirmHideCwd && (
+				<div
+					style={{
+						position: "fixed",
+						inset: 0,
+						zIndex: 600,
+						background: "rgba(0,0,0,0.45)",
+						backdropFilter: "blur(4px)",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+					}}
+					onClick={() => setConfirmHideCwd(null)}
+				>
+					<div
+						onClick={(e) => e.stopPropagation()}
+						style={{
+							width: 380,
+							maxWidth: "calc(100vw - 32px)",
+							background: "var(--bg)",
+							border: "1px solid var(--border)",
+							borderRadius: 10,
+							boxShadow: "0 16px 48px rgba(0,0,0,0.25)",
+							padding: 18,
+						}}
+					>
+						<div
+							style={{
+								fontSize: 14,
+								fontWeight: 700,
+								color: "var(--text)",
+								marginBottom: 8,
+							}}
+						>
+							Close this project?
+						</div>
+						<div
+							style={{
+								fontSize: 12,
+								lineHeight: 1.6,
+								color: "var(--text-muted)",
+								marginBottom: 16,
+								wordBreak: "break-all",
+							}}
+						>
+							“{confirmHideCwd}” will be removed from the workspace.
+							Existing sessions are preserved and you can re-add the project later.
+						</div>
+						<div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+							<button
+								autoFocus
+								onClick={() => setConfirmHideCwd(null)}
+								style={{
+									padding: "7px 14px",
+									background: "var(--bg-hover)",
+									border: "1px solid var(--border)",
+									borderRadius: 6,
+									color: "var(--text-muted)",
+									fontSize: 12,
+									fontWeight: 500,
+									cursor: "pointer",
+									transition: "background 0.15s",
+								}}
+								onMouseEnter={(e) =>
+									(e.currentTarget.style.background = "var(--bg-selected)")
+								}
+								onMouseLeave={(e) =>
+									(e.currentTarget.style.background = "var(--bg-hover)")
+								}
+							>
+								Cancel
+							</button>
+							<button
+								onClick={() => {
+									const cwd = confirmHideCwd;
+									setConfirmHideCwd(null);
+									if (cwd) hideProjectCwd(cwd);
+								}}
+								style={{
+									padding: "7px 14px",
+									background: "#ef4444",
+									border: "1px solid #ef4444",
+									borderRadius: 6,
+									color: "#fff",
+									fontSize: 12,
+									fontWeight: 700,
+									cursor: "pointer",
+									transition: "opacity 0.15s",
+								}}
+								onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
+								onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+							>
+								Close project
+							</button>
+						</div>
+					</div>
 				</div>
 			)}
 		</div>

@@ -249,13 +249,18 @@ export function AppShell() {
   // Open the Git tab in the right panel (extracted from TopBar's git button)
   const handleOpenGit = useCallback(() => {
     const gitTabId = "file:git";
+    // Toggle: if git is already the active tab and the panel is open, hide it
+    if (activeFileTabId === gitTabId && rightPanelOpen) {
+      setRightPanelOpen(false);
+      return;
+    }
     setFileTabs((prev) => {
       if (prev.find((t) => t.id === gitTabId)) return prev;
       return [...prev, { id: gitTabId, label: "Git", filePath: "git" }];
     });
     setActiveFileTabId(gitTabId);
     setRightPanelOpen(true);
-  }, []);
+  }, [activeFileTabId, rightPanelOpen]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);

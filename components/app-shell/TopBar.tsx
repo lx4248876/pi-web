@@ -268,8 +268,8 @@ export function TopBar(props: TopBarProps) {
             {showGit && (
                 <button
                     onClick={onOpenGit}
-                    title="Open Git panel"
-                    aria-label="Open Git panel"
+                    title={gitActive ? "Hide Git panel" : "Open Git panel"}
+                    aria-label={gitActive ? "Hide Git panel" : "Open Git panel"}
                     style={{
                         display: "flex",
                         alignItems: "center",
