@@ -28,24 +28,6 @@ interface Props {
         onLeafChange: (leafId: string | null) => void,
     ) => void;
     onSystemPromptChange?: (prompt: string | null) => void;
-    onSessionStatsChange?: (
-        stats: {
-            tokens: {
-                input: number;
-                output: number;
-                cacheRead: number;
-                cacheWrite: number;
-            };
-            cost?: number;
-        } | null,
-    ) => void;
-    onContextUsageChange?: (
-        usage: {
-            percent: number | null;
-            contextWindow: number;
-            tokens: number | null;
-        } | null,
-    ) => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -358,8 +340,6 @@ export function ChatWindow({
                                chatInputRef,
                                onBranchDataChange,
                                onSystemPromptChange,
-                               onSessionStatsChange,
-                               onContextUsageChange,
                            }: Props) {
     const {
         loading,
@@ -370,10 +350,7 @@ export function ChatWindow({
         agentRunning,
         modelNames,
         modelList,
-        modelThinkingLevels,
-        modelThinkingLevelMaps,
         toolPreset,
-        thinkingLevel,
         retryInfo,
         contextUsage,
         forkingEntryId,
@@ -401,7 +378,6 @@ export function ChatWindow({
         handleFollowUp,
         handleAbortCompaction,
         handleToolPresetChange,
-        handleThinkingLevelChange,
         handleAgentEventRef,
         clearLoopWarning,
         handleExtensionUIResponse,
@@ -497,39 +473,6 @@ export function ChatWindow({
         };
     }, [origHandler, handleAgentEventRef]);
 
-    // Push session stats up to AppShell for the top bar.
-    // Compare scalar fields to avoid loops from new object identity each render.
-    const statsKey = sessionStats
-        ? `${sessionStats.tokens.input}|${sessionStats.tokens.output}|${sessionStats.tokens.cacheRead}|${sessionStats.tokens.cacheWrite}|${sessionStats.cost ?? 0}`
-        : null;
-    const sessionStatsRef = useRef(sessionStats);
-    sessionStatsRef.current = sessionStats;
-    useEffect(() => {
-        onSessionStatsChange?.(sessionStatsRef.current);
-    }, [statsKey, onSessionStatsChange]);
-    useEffect(
-        () => () => {
-            onSessionStatsChange?.(null);
-        },
-        [onSessionStatsChange],
-    );
-
-    // Push context usage up to AppShell as well.
-    const ctxKey = contextUsage
-        ? `${contextUsage.percent ?? "null"}|${contextUsage.contextWindow}|${contextUsage.tokens ?? "null"}`
-        : null;
-    const contextUsageRef = useRef(contextUsage);
-    contextUsageRef.current = contextUsage;
-    useEffect(() => {
-        onContextUsageChange?.(contextUsageRef.current);
-    }, [ctxKey, onContextUsageChange]);
-    useEffect(
-        () => () => {
-            onContextUsageChange?.(null);
-        },
-        [onContextUsageChange],
-    );
-
     const onDrop = useCallback(
         (files: File[]) => {
             chatInputRef?.current?.addImages(files);
@@ -553,18 +496,6 @@ export function ChatWindow({
     const isEmptyNew =
         isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
 
-    const availableThinkingLevels = displayModelValue
-        ? (modelThinkingLevels[
-            `${displayModelValue.provider}:${displayModelValue.modelId}`
-            ] ?? null)
-        : null;
-
-    const currentThinkingLevelMap = displayModelValue
-        ? (modelThinkingLevelMaps[
-            `${displayModelValue.provider}:${displayModelValue.modelId}`
-            ] ?? null)
-        : null;
-
     const chatInputElement = (
         <ChatInput
             ref={chatInputRef}
@@ -584,17 +515,13 @@ export function ChatWindow({
             compactError={compactError}
             toolPreset={toolPreset}
             onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
-            thinkingLevel={thinkingLevel}
-            onThinkingLevelChange={
-                session || isNew ? handleThinkingLevelChange : undefined
-            }
-            availableThinkingLevels={availableThinkingLevels}
-            thinkingLevelMap={currentThinkingLevelMap}
             retryInfo={retryInfo}
             soundEnabled={soundEnabled}
             onSoundToggle={onSoundToggle}
             isAborting={isAborting}
             sseState={sseState}
+            sessionStats={sessionStats}
+            contextUsage={contextUsage}
         />
     );
 

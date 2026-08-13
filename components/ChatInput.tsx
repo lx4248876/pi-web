@@ -3,6 +3,7 @@
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import { SkillMenu, type SkillItem } from "./SkillMenu";
 import { AtMentionMenu } from "./AtMentionMenu";
+import type { SessionStatsData, ContextUsageData } from "./app-shell/TopBar";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -33,15 +34,13 @@ interface Props {
   compactError?: string | null;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
-  thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  onThinkingLevelChange?: (level: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh") => void;
-  availableThinkingLevels?: string[] | null;
-  thinkingLevelMap?: Record<string, string | null> | null;
   retryInfo?: { attempt: number; maxAttempts: number; errorMessage?: string } | null;
   soundEnabled?: boolean;
   onSoundToggle?: () => void;
   isAborting?: boolean;
   sseState?: "connecting" | "connected" | "disconnected";
+  sessionStats?: SessionStatsData | null;
+  contextUsage?: ContextUsageData | null;
 }
 
 export interface ChatInputHandle {
@@ -53,25 +52,20 @@ export interface ChatInputHandle {
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
 
-const THINKING_LEVELS = ["auto", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const THINKING_LEVEL_DESC: Record<typeof THINKING_LEVELS[number], string> = {
-  auto: "沿用 pi 默认设置",
-  off: "关闭推理",
-  minimal: "最少推理",
-  low: "低强度推理",
-  medium: "中等推理",
-  high: "高强度推理",
-  xhigh: "最高强度推理",
-};
+// Token 数简短格式化(e.g. 95000 → 95k, 2400 → 2k, 900 → 900)
+function fmtStats(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
+}
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, cwd, model, modelNames, modelList, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, toolPreset, onToolPresetChange,
-  thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo,
   soundEnabled, onSoundToggle,
   isAborting = false,
   sseState,
+  sessionStats,
+  contextUsage,
 }: Props, ref) {
   const storageKey = `pi-web:draft:${cwd}`;
   const [value, setValue] = useState(() => {
@@ -88,7 +82,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
-  const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
   const [skillMenuQuery, setSkillMenuQuery] = useState("");
@@ -96,12 +89,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [mentionMenuQuery, setMentionMenuQuery] = useState("");
   const [mentionMenuRect, setMentionMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [ctxHover, setCtxHover] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownPanelRef = useRef<HTMLDivElement>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
-  const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
@@ -229,9 +222,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }
       if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
-        if (isStreaming && (onSteer || onFollowUp)) {
-          // Default Enter sends as steer if available, else followup
-          sendQueued(onSteer ? "steer" : "followup");
+        if (isStreaming && onFollowUp) {
+          // 正在输出时按回车 → 排队（follow_up）：结束后再发，不打断当前输出
+          sendQueued("followup");
         } else {
           handleSend();
         }
@@ -366,9 +359,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }
       if (toolDropdownRef.current && !toolDropdownRef.current.contains(e.target as Node)) {
         setToolDropdownOpen(false);
-      }
-      if (thinkingDropdownRef.current && !thinkingDropdownRef.current.contains(e.target as Node)) {
-        setThinkingDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -776,103 +766,48 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   })()}
                 </div>
             )}
+            {/* Session token/cost stats — right of the model selector */}
+            {sessionStats &&
+              (sessionStats.tokens.input > 0 ||
+                sessionStats.tokens.output > 0 ||
+                sessionStats.tokens.cacheRead > 0 ||
+                (sessionStats.cost ?? 0) > 0) && (
+                <div
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    marginLeft: 6, paddingLeft: 6,
+                    borderLeft: "1px solid var(--border)",
+                    fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap",
+                    fontVariantNumeric: "tabular-nums", flexShrink: 0, overflow: "hidden",
+                  }}
+                >
+                  {sessionStats.tokens.input > 0 && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`in: ${sessionStats.tokens.input.toLocaleString()}`}>↑{fmtStats(sessionStats.tokens.input)}</span>
+                  )}
+                  {sessionStats.tokens.output > 0 && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`out: ${sessionStats.tokens.output.toLocaleString()}`}>↓{fmtStats(sessionStats.tokens.output)}</span>
+                  )}
+                  {sessionStats.tokens.cacheRead > 0 &&
+                    (() => {
+                      // 缓存命中率：会话累计缓存命中占比，原始 token 数在 hover 里
+                      const total = sessionStats.tokens.input + sessionStats.tokens.cacheRead;
+                      const pct = total > 0 ? Math.round((sessionStats.tokens.cacheRead / total) * 100) : 0;
+                      return <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`cache read: ${sessionStats.tokens.cacheRead.toLocaleString()}`}>缓存 {pct}%</span>;
+                    })()}
+                  {(sessionStats.cost ?? 0) > 0 && (
+                    <span style={{ fontWeight: 500, color: "var(--text)" }}>
+                      {sessionStats.cost! >= 0.01 ? `$${sessionStats.cost!.toFixed(2)}` : "<$0.01"}
+                    </span>
+                  )}
+                </div>
+              )}
           </div>
 
           {/* spacer */}
           <div style={{ flex: 1 }} />
 
-          {/* RIGHT: thinking + tools preset + compact + sound (idle) | Stop + sound (streaming) */}
+          {/* RIGHT: tools preset + compact + sound (idle) | Stop + sound (streaming) */}
           <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-            {!isStreaming && onThinkingLevelChange && (
-              <div ref={thinkingDropdownRef} style={{ position: "relative" }}>
-                <button
-                  onClick={() => !isStreaming && setThinkingDropdownOpen((v) => !v)}
-                  disabled={isStreaming}
-                  title="切换推理强度"
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "8px 12px",
-                    height: 32,
-                    background: thinkingDropdownOpen ? "var(--bg-hover)" : "none",
-                    border: "none",
-                    borderRadius: 9,
-                    color: "var(--text-muted)",
-                    cursor: isStreaming ? "not-allowed" : "pointer",
-                    fontSize: 12,
-                    opacity: isStreaming ? 0.5 : 1,
-                    transition: "background 0.12s, color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isStreaming) return;
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                    e.currentTarget.style.color = "var(--text)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = thinkingDropdownOpen ? "var(--bg-hover)" : "none";
-                    e.currentTarget.style.color = "var(--text-muted)";
-                  }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" />
-                    <line x1="7" y1="18" x2="12" y2="18" />
-                    <line x1="8" y1="21" x2="11" y2="21" />
-                  </svg>
-                  <span>{(() => {
-                    const lvl = thinkingLevel ?? "auto";
-                    if (lvl === "auto" || !thinkingLevelMap) return lvl;
-                    const mapped = thinkingLevelMap[lvl];
-                    return mapped != null ? mapped : lvl;
-                  })()}</span>
-                </button>
-                {thinkingDropdownOpen && (
-                  <div style={{
-                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                    zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
-                    borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 180,
-                  }}>
-                    {THINKING_LEVELS.filter((lvl) => {
-                      if (!availableThinkingLevels) return true;
-                      if (lvl === "auto") return true;
-                      return availableThinkingLevels.includes(lvl);
-                    }).map((lvl) => {
-                      const isActive = (thinkingLevel ?? "auto") === lvl;
-                      const desc = THINKING_LEVEL_DESC[lvl];
-                      const mappedVal = (lvl !== "auto" && thinkingLevelMap) ? thinkingLevelMap[lvl] : undefined;
-                      const displayLabel = (mappedVal != null && mappedVal !== lvl) ? mappedVal : lvl;
-                      const showOriginal = mappedVal != null && mappedVal !== lvl;
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => { setThinkingDropdownOpen(false); if (!isActive) onThinkingLevelChange(lvl); }}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            width: "100%", padding: "7px 12px",
-                            background: isActive ? "var(--bg-selected)" : "none",
-                            border: "none",
-                            color: isActive ? "var(--text)" : "var(--text-muted)",
-                            cursor: "pointer", fontSize: 12, textAlign: "left",
-                            fontWeight: isActive ? 600 : 400,
-                            whiteSpace: "nowrap",
-                          }}
-                          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                        >
-                          {isActive
-                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                            : <span style={{ width: 10, flexShrink: 0 }} />}
-                          <span style={{ flex: 1 }}>
-                            {displayLabel}
-                            {showOriginal && <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginLeft: 5 }}>({lvl})</span>}
-                          </span>
-                          <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
             {!isStreaming && onToolPresetChange && (
               <div ref={toolDropdownRef} style={{ position: "relative" }}>
                 <button
@@ -1126,6 +1061,82 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           </div>
 
         </div>
+
+          {/* Context usage — slim cyber gradient line; hover expands to show the value, rendered inside the bar */}
+          {(() => {
+            const windowN = contextUsage?.contextWindow ?? null;
+            const tokensN = contextUsage?.tokens ?? null;
+            const ctxPct = contextUsage?.percent ?? null;
+            const clamped = ctxPct === null ? 0 : Math.max(0, Math.min(100, ctxPct));
+            const label = ctxPct === null
+              ? "context —"
+              : `${ctxPct.toFixed(0)}%` + (windowN ? ` · ${fmtStats(tokensN ?? 0)}/${fmtStats(windowN)}` : "");
+            const title =
+              ctxPct === null
+                ? "context: unavailable yet"
+                : `context ${ctxPct.toFixed(1)}% · ${tokensN != null ? tokensN.toLocaleString() : "?"} / ${windowN != null ? windowN.toLocaleString() : "?"} tokens`;
+            // 科技风霓虹渐变:青→紫→品红→橙
+            const gradient =
+              "linear-gradient(90deg, #22d3ee, #818cf8 30%, #a855f7 52%, #ec4899 74%, #fb923c)";
+            return (
+              <div
+                onMouseEnter={() => setCtxHover(true)}
+                onMouseLeave={() => setCtxHover(false)}
+                title={title}
+                style={{ position: "relative", marginTop: 7, cursor: "default" } as React.CSSProperties}
+              >
+                <div
+                  style={{
+                    position: "relative",
+                    height: ctxHover ? 22 : 4,
+                    borderRadius: 6,
+                    overflow: "hidden",
+                    background: "var(--bg-hover)",
+                    border: ctxHover ? "1px solid var(--border)" : "none",
+                    boxShadow: ctxHover ? "0 0 14px rgba(125,211,252,0.28)" : "none",
+                    transition: "height .18s ease, box-shadow .18s ease",
+                  }}
+                >
+                  {/* 已用填充:霓虹渐变 + 微光 */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      width: `${clamped}%`,
+                      minWidth: 0,
+                      background: gradient,
+                      boxShadow: "0 0 8px rgba(103,232,249,0.35)",
+                      transition: "width .4s ease",
+                    }}
+                  >
+                    {/* 扫描流光 */}
+                    <div
+                      style={{
+                        position: "absolute", top: 0, bottom: 0, width: "55%",
+                        background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.40), transparent)",
+                        animation: "cyber-scan 2.6s linear infinite",
+                      }}
+                    />
+                  </div>
+                  {/* hover 数值直接渲染在进度条内部 */}
+                  {ctxHover && (
+                    <div
+                      style={{
+                        position: "absolute", inset: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: "0.03em",
+                        color: "#fff", whiteSpace: "nowrap", pointerEvents: "none", zIndex: 2,
+                        textShadow: "0 1px 3px rgba(0,0,0,0.45)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {label}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
       </div>
     </div>
   );

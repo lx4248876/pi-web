@@ -7,7 +7,7 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { useResizablePanel } from "./app-shell/useResizablePanel";
 import { EmptyState } from "./app-shell/EmptyState";
-import { TopBar, type SessionStatsData, type ContextUsageData } from "./app-shell/TopBar";
+import { TopBar } from "./app-shell/TopBar";
 import { RightPanel } from "./app-shell/RightPanel";
 import { SidebarPanel } from "./app-shell/SidebarPanel";
 import { useTheme } from "@/hooks/useTheme";
@@ -34,7 +34,6 @@ export function AppShell() {
   const topBarRef = useRef<HTMLDivElement>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarResizeHandleRef = useRef<HTMLDivElement>(null);
-  const rightResizeHandleRef = useRef<HTMLDivElement>(null);
 
   // Left sidebar resize — 实时改 CSS 变量驱动 .sidebar-container,松手才落 state,无 localStorage,始终挂载
   const sidebar = useResizablePanel({
@@ -69,18 +68,6 @@ export function AppShell() {
     setSystemPrompt(prompt);
   }, []);
 
-  // Session stats (tokens + cost) — populated by ChatWindow, displayed in top bar
-  const [sessionStats, setSessionStats] = useState<SessionStatsData | null>(null);
-  const handleSessionStatsChange = useCallback((stats: SessionStatsData | null) => {
-    setSessionStats(stats);
-  }, []);
-
-  // Context usage — populated by ChatWindow, displayed in top bar
-  const [contextUsage, setContextUsage] = useState<ContextUsageData | null>(null);
-  const handleContextUsageChange = useCallback((usage: ContextUsageData | null) => {
-    setContextUsage(usage);
-  }, []);
-
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "git" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -105,17 +92,6 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-
-  // Right panel resize — 拖拽中实时改 state 驱动 width,持久化到 localStorage,仅面板打开时挂载
-  const rightPanel = useResizablePanel({
-    containerRef: appShellRef,
-    handleRef: rightResizeHandleRef,
-    min: 280, max: 1200,
-    computeWidth: (clientX, rect) => rect.right - clientX,
-    defaultWidth: 450,
-    storageKey: "pi-web:right-panel-width",
-    enabled: rightPanelOpen,
-  });
 
   const handleAtMention = useCallback((relativePath: string) => {
     chatInputRef.current?.insertText("`" + relativePath + "`");
@@ -386,9 +362,6 @@ export function AppShell() {
           systemBtnRef={systemBtnRef}
           systemPrompt={systemPrompt}
           topPanelPos={topPanelPos}
-          sessionStats={sessionStats}
-          contextUsage={contextUsage}
-          rightPanelInset={rightPanelOpen}
         />
 
         {/* Chat content */}
@@ -405,8 +378,6 @@ export function AppShell() {
               chatInputRef={chatInputRef}
               onBranchDataChange={handleBranchDataChange}
               onSystemPromptChange={handleSystemPromptChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onContextUsageChange={handleContextUsageChange}
             />
           ) : showPlaceholder ? (
             <EmptyState hasCwd={!!activeCwd} />
@@ -416,13 +387,11 @@ export function AppShell() {
 
       <RightPanel
         open={rightPanelOpen}
-        dragging={rightPanel.dragging}
-        width={rightPanel.width}
-        resizeHandleRef={rightResizeHandleRef}
         tabs={fileTabs}
         activeTabId={activeFileTabId ?? ""}
         onSelectTab={setActiveFileTabId}
         onCloseTab={handleCloseFileTab}
+        onClose={() => setRightPanelOpen(false)}
         activeFilePath={activeFileTab?.filePath ?? null}
         cwd={currentCwd ?? undefined}
       />

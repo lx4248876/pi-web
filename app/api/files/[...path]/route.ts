@@ -403,3 +403,49 @@ export async function GET(
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
+
+const WRITE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * 写文件(编辑保存):使用与 GET 相同的允许根白名单校验,只允许写入已注册会话 cwd 内的文件。
+ * 请求体: { content: string }
+ */
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  try {
+    const { path: segments } = await params;
+    const filePath = filePathFromSegments(segments);
+
+    const allowedRoots = await getAllowedRoots();
+    if (!isPathAllowed(filePath, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.content !== "string") {
+      return NextResponse.json({ error: "Missing content" }, { status: 400 });
+    }
+
+    if (Buffer.byteLength(body.content, "utf-8") > WRITE_MAX_BYTES) {
+      return NextResponse.json({ error: "File too large to write (>5MB)" }, { status: 413 });
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    if (!stat.isFile()) {
+      return NextResponse.json({ error: "Not a file" }, { status: 400 });
+    }
+
+    fs.writeFileSync(filePath, body.content, "utf-8");
+    const newStat = fs.statSync(filePath);
+    return NextResponse.json({ ok: true, size: newStat.size });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}

@@ -548,6 +548,74 @@ function TextFileViewer({ filePath, cwd }: Props) {
   const [changeCount, setChangeCount] = useState(0);
   const esRef = useRef<EventSource | null>(null);
 
+  // Edit state
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [editDirty, setEditDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+
+  // 进入编辑时聚焦
+  useEffect(() => {
+    if (editing && editRef.current) {
+      editRef.current.focus();
+    }
+  }, [editing]);
+
+  const startEdit = () => {
+    setEditText(data?.content ?? "");
+    setEditDirty(false);
+    setSaveError(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setEditDirty(false);
+    setSaveError(null);
+  };
+
+  const handleSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const encoded = encodeFilePathForApi(filePath);
+      const res = await fetch(`/api/files/${encoded}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editText }),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string; size?: number };
+      if (!res.ok || !d.ok) {
+        setSaveError(d.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      // 立即更新本地内容,SSE watch 之后也会再同步一次
+      setData((prev) => (prev ? { ...prev, content: editText, size: d.size ?? prev.size } : prev));
+      setEditing(false);
+      setEditDirty(false);
+    } catch (e) {
+      setSaveError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 编辑区快捷键:Ctrl/Cmd+S 保存;Esc 退出编辑(不冒泡到弹窗的 Esc 关闭)
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      cancelEdit();
+    }
+  };
+
+  // 编辑中屏蔽弹窗的全局 Esc 关闭监听已在 RightPanel 内通过「编辑区不关弹窗」实现;退出编辑由 textarea 局部 Esc 接管
+
   const fetchContent = useCallback((filePath: string, isRefresh = false) => {
     const encoded = encodeFilePathForApi(filePath);
     return fetch(`/api/files/${encoded}?type=read`)
@@ -667,6 +735,37 @@ function TextFileViewer({ filePath, cwd }: Props) {
         <span style={{ marginLeft: "auto" }}>{data.language}</span>
         {viewMode === "source" && <span>{lines.length} lines</span>}
         <span>{formatSize(data.size)}</span>
+
+        {/* Edit controls */}
+        {editing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {editDirty && <span title="Unsaved changes" style={{ color: "#fbbf24", fontSize: 12 }}>●</span>}
+            {saveError && <span style={{ color: "#f87171", fontSize: 11 }}>{saveError}</span>}
+            <button
+              onClick={cancelEdit}
+              title="Cancel (Esc)"
+              style={{ padding: "2px 10px", fontSize: 11, cursor: "pointer", background: "var(--bg-hover)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: 5 }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              title="Save (Ctrl+S)"
+              style={{ padding: "2px 12px", fontSize: 11, cursor: saving ? "wait" : "pointer", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 5, fontWeight: 600, opacity: saving ? 0.7 : 1 }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        ) : viewMode === "source" ? (
+          <button
+            onClick={startEdit}
+            title="Edit this file (read/write)"
+            style={{ padding: "2px 10px", fontSize: 11, cursor: "pointer", background: "var(--bg-hover)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: 5 }}
+          >
+            Edit
+          </button>
+        ) : null}
 
         {/* Live watch indicator */}
         <span
@@ -790,7 +889,35 @@ function TextFileViewer({ filePath, cwd }: Props) {
 
       {/* Content area */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
-        {viewMode === "diff" && hasDiff ? (
+        {editing ? (
+          <textarea
+            ref={editRef}
+            value={editText}
+            onChange={(e) => { setEditText(e.target.value); setEditDirty(true); }}
+            onKeyDown={handleEditKeyDown}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            style={{
+              width: "100%",
+              height: "100%",
+              minHeight: "100%",
+              boxSizing: "border-box",
+              background: "var(--bg)",
+              color: "var(--text)",
+              border: "none",
+              outline: "none",
+              resize: "none",
+              padding: "12px 16px",
+              fontFamily: "var(--font-mono)",
+              fontSize: 13,
+              lineHeight: 1.6,
+              whiteSpace: "pre",
+              overflow: "auto",
+              tabSize: 2,
+            }}
+          />
+        ) : viewMode === "diff" && hasDiff ? (
           <DiffView oldContent={prevContent!} newContent={data.content} language={data.language} />
         ) : isHtml && previewMode ? (
           <iframe
