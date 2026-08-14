@@ -154,6 +154,41 @@ function isDialogUiRequest(
 	);
 }
 
+/** Join the text blocks of an agent message into a single string. */
+function textOfMessage(msg: AgentMessage): string {
+	if (typeof msg.content === "string") return msg.content;
+	return (msg.content as Array<{ type?: string; text?: string }>)
+		.filter((b) => b.type === "text" && typeof b.text === "string")
+		.map((b) => b.text as string)
+		.join("\n");
+}
+
+/**
+ * Extract the handoff package from the assistant reply.
+ *
+ * The `/handoff` skill is instructed to output the package as plain Markdown body
+ * starting with the `# 任务交接包` heading (NOT wrapped in a code fence). Some
+ * models may still fence it, so accept both forms:
+ * 1. A fenced code block whose body contains the `# 任务交接包` heading.
+ * 2. Plain text from the `# 任务交接包` heading onward (the skill's canonical shape).
+ * Returns null when neither is present (the handoff skill output isn't usable).
+ */
+function extractHandoffPackage(text: string): string | null {
+	// Preferred: a fenced code block containing the `# 任务交接包` heading.
+	const fenceRe = /```[a-zA-Z0-9_-]*[\r\n]+([\s\S]*?)[\r\n]*```/g;
+	let m: RegExpExecArray | null;
+	while ((m = fenceRe.exec(text))) {
+		if (/#\s*任务交接包/.test(m[1])) return m[1].trim();
+	}
+	// Fallback: the skill's canonical shape — the package is the Markdown body itself,
+	// starting with the `# 任务交接包` heading. Slice from that heading onward.
+	const heading = /(?:^|\n)(#{1,6}\s*任务交接包)/.exec(text);
+	if (!heading) return null;
+	// Drop any accidental trailing fence remnants left by the model.
+	const pkg = text.slice(heading.index + heading[0].indexOf("#"));
+	return pkg.replace(/```[a-zA-Z0-9_-]*\s*\n?$/, "").trim();
+}
+
 export type AgentPhase =
 	| { kind: "waiting_model" }
 	| { kind: "running_tools"; tools: { id: string; name: string }[] }
@@ -165,6 +200,7 @@ export interface UseAgentSessionOptions {
 	onAgentStart?: () => void;
 	onAgentEnd?: () => void;
 	onSessionCreated?: (session: SessionInfo) => void;
+	onSessionContent?: () => void;
 	onSessionForked?: (newSessionId: string) => void;
 	modelsRefreshKey?: number;
 	chatInputRef?: React.RefObject<ChatInputHandle | null>;
@@ -199,6 +235,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		onAgentStart,
 		onAgentEnd,
 		onSessionCreated,
+		onSessionContent,
 		onSessionForked,
 		modelsRefreshKey,
 		onBranchDataChange,
@@ -220,7 +257,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [modelNames, setModelNames] = useState<Record<string, string>>({});
 	const [modelList, setModelList] = useState<
-		{ id: string; name: string; provider: string }[]
+		{
+			id: string;
+			name: string;
+			provider: string;
+			contextWindow?: number;
+			api?: string;
+		}[]
 	>([]);
 	const [modelThinkingLevels, setModelThinkingLevels] = useState<
 		Record<string, string[]>
@@ -254,6 +297,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	} | null>(null);
 	const [isCompacting, setIsCompacting] = useState(false);
 	const [compactError, setCompactError] = useState<string | null>(null);
+	const [isHandoffRunning, setIsHandoffRunning] = useState(false);
+	const [handoffError, setHandoffError] = useState<string | null>(null);
 	const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
 	const [isAborting, setIsAborting] = useState(false);
 	const [sseState, setSseState] = useState<
@@ -275,6 +320,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
 	const eventSourceRef = useRef<EventSource | null>(null);
 	const sessionIdRef = useRef<string | null>(session?.id ?? null);
+	// Notify the shell once per session when its first assistant message lands on disk,
+	// so the session list refreshes as soon as the new session file exists (not only at agent_end).
+	const sessionContentNotifiedRef = useRef<Set<string>>(new Set());
 	const agentRunningRef = useRef(false);
 	const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(
 		null,
@@ -293,6 +341,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				bypassRunning?: boolean;
 			}) => Promise<void>)
 		| null
+	>(null);
+	// Handoff flow coordination: set when the Handoff button kicks off the skill;
+	// the next agent_end (and captured `# 任务交接包` block) triggers a fresh session.
+	const pendingHandoffRef = useRef(false);
+	const handoffPackageRef = useRef<string | null>(null);
+	const createHandoffSessionRef = useRef<
+		((pkg: string) => Promise<void>) | null
 	>(null);
 	const currentModelRef = useRef<{
 		provider: string;
@@ -323,6 +378,46 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		const total =
 			tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
 		return total > 0 ? { tokens, cost } : null;
+	})();
+
+	// context 占用 = 最后一次真实模型响应时 provider 上报的 prompt token，
+	// 而不是把所有回合的 usage.input 累加（那会随轮次无限增长、把每轮整段上下文当消耗）。
+	// 各家语义不同：anthropic/bedrock 的 usage.input 已含缓存；
+	// openai/gemini 等把缓存拆到 cacheRead/cacheWrite，需加回才算完整 prompt。
+	// 活会话运行时（getState/SSE 给的 contextUsage）若标记“未知”（如刚压缩完、尚无真实用量），保持未知态。
+	const derivedContextUsage = (() => {
+		// 运行时明确“未知”：自动压缩后尚无新的真实用量，拿旧值冒充会虚高，保持显示空
+		if (contextUsage && contextUsage.tokens === null) return contextUsage;
+		const cm = currentModel;
+		if (!cm) return null;
+		const found = modelList.find(
+			(m) => m.id === cm.modelId && m.provider === cm.provider,
+		);
+		const win = found?.contextWindow;
+		if (!win || win <= 0) return null;
+		// 倒序找最后一条带真实用量(>0)的 assistant 消息
+		let tokens: number | null = null;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.role !== "assistant") continue;
+			const u = (m as import("@/lib/types").AssistantMessage).usage;
+			if (!u) continue;
+			const input = u.input ?? 0;
+			const cache = (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+			if (input + cache <= 0) continue;
+			const inputHasCache =
+				found?.api === "anthropic-messages" ||
+				found?.api === "bedrock-converse-stream";
+			tokens = input + (inputHasCache ? 0 : cache);
+			break;
+		}
+		if (tokens === null) {
+			// 尚无真实用量（如刚开跑、第一条还在流式）→退回运行时估算，避免误显示“未知”
+			if (contextUsage && contextUsage.tokens != null) tokens = contextUsage.tokens;
+			else return null;
+		}
+		const percent = (tokens / win) * 100;
+		return { percent, contextWindow: win, tokens };
 	})();
 
 	const loadSession = useCallback(
@@ -511,6 +606,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 							.catch(() => {});
 					}
 					onAgentEnd?.();
+					// If this turn was a Handoff run, spin up a fresh session seeded with the package.
+					if (pendingHandoffRef.current) {
+						pendingHandoffRef.current = false;
+						const pkg = handoffPackageRef.current;
+						handoffPackageRef.current = null;
+						if (pkg) {
+							void createHandoffSessionRef.current?.(pkg);
+						} else {
+							setIsHandoffRunning(false);
+							setHandoffError("在回复中未找到 `# 任务交接包` 代码块");
+						}
+					}
 					break;
 				case "message_start":
 				case "message_update": {
@@ -520,6 +627,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 							type: "update",
 							message: normalizeToolCalls(msg as AgentMessage),
 						});
+					}
+					// The new session's .jsonl file is only written once the first assistant
+					// message is appended. Signal that moment so the list refreshes immediately.
+					const sid = sessionIdRef.current;
+					if (sid && !sessionContentNotifiedRef.current.has(sid)) {
+						sessionContentNotifiedRef.current.add(sid);
+						onSessionContent?.();
 					}
 					setAgentPhase(null);
 					break;
@@ -547,6 +661,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 								});
 							}, 1000);
 						}
+					}
+					// Capture the generated handoff package (assistant message during a Handoff run).
+					if (pendingHandoffRef.current && completed?.role === "assistant") {
+						const pkg = extractHandoffPackage(textOfMessage(completed));
+						if (pkg) handoffPackageRef.current = pkg;
 					}
 					dispatch({ type: "reset" });
 					setAgentPhase({ kind: "waiting_model" });
@@ -681,7 +800,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				}
 			}
 		},
-		[loadSession, onAgentEnd, onAgentStart],
+		[loadSession, onAgentEnd, onAgentStart, onSessionContent],
 	);
 	handleAgentEventRef.current = handleAgentEvent;
 
@@ -1014,6 +1133,104 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		}
 	}, []);
 
+	/**
+	 * After a Handoff run finishes, create a brand-new session and seed it with the
+	 * extracted `# 任务交接包` package as its first user message, then switch to it.
+	 */
+	const createHandoffSession = useCallback(
+		async (pkg: string) => {
+			const cwd = session?.cwd ?? newSessionCwd;
+			if (!cwd) {
+				setIsHandoffRunning(false);
+				setHandoffError("无法确定新会话的工作目录");
+				return;
+			}
+			const { PRESET_NONE, PRESET_DEFAULT, PRESET_FULL } = await import(
+				"@/components/ToolPanel"
+			);
+			const toolNames =
+				toolPreset === "none"
+					? PRESET_NONE
+					: toolPreset === "default"
+						? PRESET_DEFAULT
+						: PRESET_FULL;
+			try {
+				const res = await fetch("/api/agent/new", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						cwd,
+						type: "create",
+						toolNames,
+						...(newSessionModel
+							? {
+									provider: newSessionModel.provider,
+									modelId: newSessionModel.modelId,
+								}
+							: {}),
+					}),
+				});
+				if (!res.ok) {
+					let detail = "";
+					try {
+						const errorBody = (await res.json()) as { error?: string };
+						detail = errorBody.error ? `: ${errorBody.error}` : "";
+					} catch {
+						// ignore non-JSON error responses
+					}
+					throw new Error(`HTTP ${res.status}${detail}`);
+				}
+				const result = (await res.json()) as { sessionId: string };
+				const realId = result.sessionId;
+				sessionIdRef.current = realId;
+				connectEvents(realId);
+				await sendAgentCommand(realId, { type: "prompt", message: pkg });
+				// Reposition into the fresh session; the remount will reload it from disk.
+				setMessages([
+					{ role: "user", content: pkg, timestamp: Date.now() } as AgentMessage,
+				]);
+				onSessionCreated?.({
+					id: realId,
+					path: "",
+					cwd,
+					name: undefined,
+					created: new Date().toISOString(),
+					modified: new Date().toISOString(),
+					messageCount: 1,
+					firstMessage: pkg,
+				});
+			} catch (e) {
+				setHandoffError(e instanceof Error ? e.message : String(e));
+			} finally {
+				setIsHandoffRunning(false);
+			}
+		},
+		[
+			session?.cwd,
+			newSessionCwd,
+			newSessionModel,
+			toolPreset,
+			connectEvents,
+			onSessionCreated,
+		],
+	);
+	createHandoffSessionRef.current = createHandoffSession;
+
+	/** Invoke the handoff skill on the current session; the new session is spun up on agent_end. */
+	const handleHandoff = useCallback(async () => {
+		const sid = sessionIdRef.current;
+		if (!sid || agentRunning || isHandoffRunning) return;
+		setIsHandoffRunning(true);
+		setHandoffError(null);
+		pendingHandoffRef.current = true;
+		handoffPackageRef.current = null;
+		await handleSendRef.current?.(
+			"/handoff 请为当前唯一主任务生成交接包：正文以 `# 任务交接包` 标题开头，直接作为 Markdown 正文输出完整交接包（不要用代码围栏包裹，不要反问）。",
+			undefined,
+			{ bypassRunning: true },
+		);
+	}, [agentRunning, isHandoffRunning]);
+
 	const handleExtensionUIResponse = useCallback(
 		async (response: ExtensionUIResponse) => {
 			const sid = sessionIdRef.current;
@@ -1140,7 +1357,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			.then(
 				(d: {
 					models: Record<string, string>;
-					modelList?: { id: string; name: string; provider: string }[];
+					modelList?: {
+						id: string;
+						name: string;
+						provider: string;
+						contextWindow?: number;
+						api?: string;
+					}[];
 					defaultModel?: { provider: string; modelId: string } | null;
 					thinkingLevels?: Record<string, string[]>;
 				}) => {
@@ -1200,11 +1423,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		newSessionModel,
 		toolPreset,
 		retryInfo,
-		contextUsage,
+		contextUsage: derivedContextUsage,
 		systemPrompt,
 		forkingEntryId,
 		isCompacting,
 		compactError,
+		isHandoffRunning,
+		handoffError,
 		currentModel,
 		displayModel,
 		sessionStats,
@@ -1230,6 +1455,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		handleNavigate,
 		handleModelChange,
 		handleCompact,
+		handleHandoff,
 		handleSteer,
 		handleFollowUp,
 		handleAbortCompaction,

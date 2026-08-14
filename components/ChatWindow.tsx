@@ -21,6 +21,7 @@ interface Props {
     onAgentEnd?: () => void;
     onStreamingChange?: (sessionId: string | null) => void;
     onSessionCreated?: (session: SessionInfo) => void;
+    onSessionContent?: () => void;
     onSessionForked?: (newSessionId: string) => void;
     modelsRefreshKey?: number;
     chatInputRef?: React.RefObject<ChatInputHandle | null>;
@@ -459,6 +460,7 @@ export function ChatWindow({
                                onAgentEnd,
                                onStreamingChange,
                                onSessionCreated,
+                               onSessionContent,
                                onSessionForked,
                                modelsRefreshKey,
                                chatInputRef,
@@ -480,6 +482,8 @@ export function ChatWindow({
         forkingEntryId,
         isCompacting,
         compactError,
+        isHandoffRunning,
+        handoffError,
         displayModel: displayModelValue,
         sessionStats,
         agentPhase,
@@ -498,6 +502,7 @@ export function ChatWindow({
         handleNavigate,
         handleModelChange,
         handleCompact,
+        handleHandoff,
         handleSteer,
         handleFollowUp,
         handleAbortCompaction,
@@ -512,6 +517,7 @@ export function ChatWindow({
         onAgentStart,
         onAgentEnd,
         onSessionCreated,
+        onSessionContent,
         onSessionForked,
         modelsRefreshKey,
         onBranchDataChange,
@@ -641,9 +647,12 @@ export function ChatWindow({
             modelList={modelList}
             onModelChange={handleModelChange}
             onCompact={session || isNew ? handleCompact : undefined}
+            onHandoff={session || isNew ? handleHandoff : undefined}
             onAbortCompaction={handleAbortCompaction}
             isCompacting={isCompacting}
             compactError={compactError}
+            isHandoffRunning={isHandoffRunning}
+            handoffError={handoffError}
             toolPreset={toolPreset}
             onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
             retryInfo={retryInfo}
@@ -789,7 +798,7 @@ export function ChatWindow({
                                         letterSpacing: "-0.01em",
                                     }}
                                 >
-									My Agent Web
+									my-pi-web
 								</span>
                                 <span
                                     style={{
@@ -826,6 +835,63 @@ export function ChatWindow({
 								</span>
                             </div>
                         </div>
+
+                        {/* 当前工作目录指示:明确告知这条新会话将跑在哪个项目目录 */}
+                        {newSessionCwd && (
+                            <div
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    margin: "0 16px 14px",
+                                    padding: "7px 12px",
+                                    border: "1px solid var(--border)",
+                                    borderRadius: 7,
+                                    background: "var(--bg-hover)",
+                                }}
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="var(--accent)"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    style={{ flexShrink: 0 }}
+                                >
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                                </svg>
+                                <span
+                                    style={{
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        color: "var(--text-dim)",
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.05em",
+                                        flexShrink: 0,
+                                    }}
+                                >
+                                    Work in
+                                </span>
+                                <span
+                                    style={{
+                                        fontSize: 12,
+                                        fontFamily: "var(--font-mono)",
+                                        color: "var(--text)",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                        minWidth: 0,
+                                    }}
+                                    title={newSessionCwd}
+                                >
+                                    {newSessionCwd}
+                                </span>
+                            </div>
+                        )}
+
                         {chatInputElement}
                     </div>
                 </div>

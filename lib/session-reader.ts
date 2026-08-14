@@ -10,10 +10,11 @@ export function getSessionsDir(): string {
   return `${getAgentDir()}/sessions`;
 }
 
-// ─── Session terminal status ────────────────────────────────────────────────
+// ─── Session status ──────────────────────────────────────────────────────────
 // Derived from the trailing entries of a session file (read only, tail window), so the
 // list can cheaply tell whether each session ended OK (green dot) or failed (red dot).
-// Returns null for empty / still-running sessions (no dot).
+// Returns null for empty / ambiguous tails (no dot); live sessions are reported as
+// "running" by listAllSessions instead.
 
 const STATUS_TAIL_BYTES = 128 * 1024;
 
@@ -95,7 +96,7 @@ export function readSessionStatus(filePath: string): SessionStatus {
 }
 
 export async function listAllSessions(options?: {
-  /** Ids of sessions currently live in the process; their terminal dot is suppressed. */
+  /** Ids of sessions currently live in the process; they report status "running". */
   runningSessionIds?: Set<string>;
 }): Promise<SessionInfo[]> {
   const piSessions: PiSessionInfo[] = await SessionManager.listAll();
@@ -106,8 +107,6 @@ export async function listAllSessions(options?: {
   return piSessions.map((s) => {
     // Populate path cache so resolveSessionPath works without a full scan
     cache.set(s.id, s.path);
-    // A still-live session is running/open: don't show a terminal done/failed dot yet.
-    const running = !!options?.runningSessionIds?.has(s.id);
     return {
       path: s.path,
       id: s.id,
@@ -118,7 +117,10 @@ export async function listAllSessions(options?: {
       messageCount: s.messageCount,
       firstMessage: s.firstMessage || "(no messages)",
       parentSessionId: s.parentSessionPath ? pathToId.get(s.parentSessionPath) : undefined,
-      status: running ? undefined : readSessionStatus(s.path) ?? undefined,
+      // A still-live session shows "running" (spinner dot), others derive done/failed from their file tail.
+      status: options?.runningSessionIds?.has(s.id)
+        ? "running"
+        : readSessionStatus(s.path) ?? undefined,
     };
   });
 }

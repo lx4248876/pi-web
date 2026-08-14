@@ -29,9 +29,12 @@ interface Props {
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
   onCompact?: () => void;
+  onHandoff?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
   compactError?: string | null;
+  isHandoffRunning?: boolean;
+  handoffError?: string | null;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
   retryInfo?: { attempt: number; maxAttempts: number; errorMessage?: string } | null;
@@ -59,7 +62,8 @@ function fmtStats(n: number): string {
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, cwd, model, modelNames, modelList, onModelChange,
-  onCompact, onAbortCompaction, isCompacting, compactError, toolPreset, onToolPresetChange,
+  onCompact, onHandoff, onAbortCompaction, isCompacting, compactError,
+  isHandoffRunning, handoffError, toolPreset, onToolPresetChange,
   retryInfo,
   soundEnabled, onSoundToggle,
   isAborting = false,
@@ -880,6 +884,55 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     })}
                   </div>
                 )}
+              </div>
+            )}
+
+            {!isStreaming && onHandoff && (
+              <div style={{ position: "relative" }}>
+                {handoffError && (
+                  <div style={{
+                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                    background: "#1f2937", color: "#f87171",
+                    fontSize: 11, padding: "4px 8px", borderRadius: 5,
+                    whiteSpace: "nowrap", pointerEvents: "none",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 50,
+                  }}>
+                    {handoffError}
+                  </div>
+                )}
+                <button
+                  onClick={onHandoff}
+                  disabled={isStreaming || isHandoffRunning}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    padding: "8px 12px", height: 32,
+                    background: isHandoffRunning ? "rgba(34,197,94,0.10)" : "none",
+                    border: "none", borderRadius: 9,
+                    color: isHandoffRunning ? "#22c55e" : "var(--text-muted)",
+                    cursor: (isStreaming || isHandoffRunning) ? "not-allowed" : "pointer",
+                    fontSize: 12, opacity: isStreaming ? 0.5 : 1,
+                    transition: "background 0.12s, color 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (isStreaming || isHandoffRunning) return;
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = "var(--text)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = isHandoffRunning ? "rgba(34,197,94,0.10)" : "none";
+                    e.currentTarget.style.color = isHandoffRunning ? "#22c55e" : "var(--text-muted)";
+                  }}
+                  title="生成交接包并开启新会话"
+                >
+                  {isHandoffRunning ? (
+                    <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><polyline points="21 12 17 12 12 12" /><polyline points="12 21 12 17 12 12" /></svg>交接中…</>
+                  ) : (
+                    <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                      <polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                    </svg>Handoff</>
+                  )}
+                </button>
               </div>
             )}
 

@@ -56,6 +56,7 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 const RECENT_CWDS_STORAGE_KEY = "pi-recent-cwds";
+const PROJECT_ORDER_STORAGE_KEY = "pi-project-order";
 const RECENT_CWDS_LIMIT = 20;
 
 function getRecentCwds(sessions: SessionInfo[]): string[] {
@@ -71,6 +72,20 @@ function getRecentCwds(sessions: SessionInfo[]): string[] {
 		.sort((a, b) => b[1].localeCompare(a[1]))
 		.slice(0, RECENT_CWDS_LIMIT)
 		.map(([cwd]) => cwd);
+}
+
+// Move `item` in an array from its current index to just before `before`, keeping
+// the rest of the order intact. Both positions are referenced by value.
+function moveInList<T>(list: T[], item: T, before: T): T[] {
+  const next = list.filter((x) => x !== item);
+  if (item === before) return next;
+  const at = next.indexOf(before);
+  if (at < 0) {
+    next.push(item);
+  } else {
+    next.splice(at, 0, item);
+  }
+  return next;
 }
 
 function readStoredRecentCwds(): string[] {
@@ -217,7 +232,7 @@ function PiAgentTitle() {
 
 	const target = showVersion
 		? `${process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}p${process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}`
-		: "My Agent Web";
+		: "my-pi-web";
 	const display = useScramble(target, scrambling);
 
 	const triggerScramble = useCallback((toVersion: boolean) => {
@@ -288,6 +303,20 @@ export function SessionSidebar({
 	const [error, setError] = useState<string | null>(null);
 	const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
 	const [storedRecentCwds, setStoredRecentCwds] = useState<string[]>([]);
+	const [projectOrder, setProjectOrder] = useState<string[]>(() => {
+		if (typeof window === "undefined") return [];
+		try {
+			const raw = window.localStorage.getItem(PROJECT_ORDER_STORAGE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (Array.isArray(parsed))
+					return parsed.filter((c): c is string => typeof c === "string");
+			}
+		} catch {}
+		return [];
+	});
+	const [dragCwd, setDragCwd] = useState<string | null>(null);
+	const [dropTargetCwd, setDropTargetCwd] = useState<string | null>(null);
 	const [homeDir, setHomeDir] = useState<string>("");
 	const [browseOpen, setBrowseOpen] = useState(false);
 	const [browsePath, setBrowsePath] = useState<string | null>(null);
@@ -326,9 +355,12 @@ export function SessionSidebar({
 		return {};
 	});
 
-	// Last time the user viewed each session (persisted) — drives the transient
-	// dot: a dot shows only for sessions with a completed/failed result newer than
-	// the last time it was viewed, and it clears once you switch to / view it.
+	// 归档面板(聚焦弹出,展示所有被关闭项目下的归档会话)开关
+	const [archivedOpen, setArchivedOpen] = useState(false);
+
+	// Last time the user viewed each session (persisted) — drives the terminal
+	// dot: green/red shows only for sessions with a completed/failed result newer
+	// than the last time it was viewed, and it clears once you switch to / view it.
 	const [seenAt, setSeenAt] = useState<Record<string, string>>(() => {
 		if (typeof window !== "undefined") {
 			try {
@@ -351,6 +383,7 @@ export function SessionSidebar({
 	const markSessionSeen = useCallback(
 		(sessionId: string) => {
 			setSeenAt((prev) => {
+				if ((prev[sessionId] ?? "") >= new Date().toISOString()) return prev;
 				const next = { ...prev, [sessionId]: new Date().toISOString() };
 				persistSeenAt(next);
 				return next;
@@ -532,48 +565,44 @@ export function SessionSidebar({
 		};
 	}, []);
 
-	const loadSessions = useCallback(
-		async (showLoading = false, opts?: { silent?: boolean }) => {
-			try {
-				if (showLoading) setLoading(true);
-				const res = await fetch("/api/sessions");
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const data = (await res.json()) as { sessions: SessionInfo[] };
-				setAllSessions(data.sessions);
-				// First-ever load: treat all pre-existing sessions as already-viewed so
-				// historical completions don't all light up at once — dots only reflect
-				// NEW completions from now on.
-				if (!seenSeededRef.current) {
-					seenSeededRef.current = true;
-					try {
-						if (!window.localStorage.getItem("pi-session-seen-init")) {
-							const seed: Record<string, string> = {};
-							for (const s of data.sessions) seed[s.id] = s.modified;
-							setSeenAt(seed);
-							persistSeenAt(seed);
-							window.localStorage.setItem("pi-session-seen-init", "1");
-						}
-					} catch {}
-				}
-				setError(null);
-				// Silent refreshes (e.g. status polling) skip the refresh-check flash.
-				if (!showLoading && !opts?.silent) {
-					setSessionRefreshDone(true);
-					if (sessionRefreshTimerRef.current)
-						clearTimeout(sessionRefreshTimerRef.current);
-					sessionRefreshTimerRef.current = setTimeout(
-						() => setSessionRefreshDone(false),
-						2000,
-					);
-				}
-			} catch (e) {
-				setError(String(e));
-			} finally {
-				if (showLoading) setLoading(false);
+	const loadSessions = useCallback(async (showLoading = false) => {
+		try {
+			if (showLoading) setLoading(true);
+			const res = await fetch("/api/sessions");
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const data = (await res.json()) as { sessions: SessionInfo[] };
+			setAllSessions(data.sessions);
+			// First-ever load: treat all pre-existing sessions as already-viewed so
+			// historical completions don't all light up at once — dots only reflect
+			// NEW completions from now on.
+			if (!seenSeededRef.current) {
+				seenSeededRef.current = true;
+				try {
+					if (!window.localStorage.getItem("pi-session-seen-init")) {
+						const seed: Record<string, string> = {};
+						for (const s of data.sessions) seed[s.id] = s.modified;
+						setSeenAt(seed);
+						persistSeenAt(seed);
+						window.localStorage.setItem("pi-session-seen-init", "1");
+					}
+				} catch {}
 			}
-		},
-		[],
-	);
+			setError(null);
+			if (!showLoading) {
+				setSessionRefreshDone(true);
+				if (sessionRefreshTimerRef.current)
+					clearTimeout(sessionRefreshTimerRef.current);
+				sessionRefreshTimerRef.current = setTimeout(
+					() => setSessionRefreshDone(false),
+					2000,
+				);
+			}
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			if (showLoading) setLoading(false);
+		}
+	}, []);
 
 	// Session dots update through explicit events (agent start/end and session
 	// select), not background polling.
@@ -673,13 +702,24 @@ export function SessionSidebar({
 
 	const handleSessionSelect = useCallback(
 		(session: SessionInfo) => {
-			// Viewing the session clears its transient dot, and refreshes the list.
+			// Viewing the session clears its terminal dot, and refreshes the list.
 			markSessionSeen(session.id);
 			onSelectSession(session);
 			loadSessions();
 		},
 		[onSelectSession, loadSessions, markSessionSeen],
 	);
+
+	// A stream that ends while its session is still open was watched live —
+	// mark it seen so its terminal dot doesn't light up afterwards.
+	const prevRunningRef = useRef<string | null>(null);
+	useEffect(() => {
+		const prev = prevRunningRef.current;
+		prevRunningRef.current = runningSessionId ?? null;
+		if (prev && !runningSessionId && prev === selectedSessionId) {
+			markSessionSeen(prev);
+		}
+	}, [runningSessionId, selectedSessionId, markSessionSeen]);
 
 	const handleNewSessionFor = useCallback(
 		(cwd: string) => {
@@ -739,8 +779,10 @@ export function SessionSidebar({
 
 	const activeProjectCwd = selectedCwdProp ?? selectedCwd;
 
-	// Construct a nested grouping: projects map to session trees
-	const projectList = useMemo(() => {
+	// Candidate set (filtered, recency-based). Order here is only a seed: the
+	// displayed order is pinned by `projectOrder` below so active sessions can't
+	// shuffle the list around.
+	const baseProjectList = useMemo(() => {
 		const persistentCwds = new Set(
 			recentCwdOptions.filter((o) => o.source !== "session").map((o) => o.cwd),
 		);
@@ -759,6 +801,64 @@ export function SessionSidebar({
 						persistentCwds.has(p.cwd)),
 			);
 	}, [recentCwdOptions, allSessions, selectedCwd, selectedCwdProp, hiddenCwds]);
+
+	const persistProjectOrder = useCallback((next: string[]) => {
+		try {
+			window.localStorage.setItem(
+				PROJECT_ORDER_STORAGE_KEY,
+				JSON.stringify(next),
+			);
+		} catch {}
+	}, []);
+
+	// Freeze the current order once, the first time projects appear. Afterwards
+	// only explicit drags may change it — session activity can't reorder.
+	useEffect(() => {
+		const cwds = baseProjectList.map((p) => p.cwd);
+		if (cwds.length === 0 || projectOrder.length > 0) return;
+		const next = [...new Set([...projectOrder, ...cwds])];
+		setProjectOrder(next);
+		persistProjectOrder(next);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [baseProjectList]);
+
+	// Displayed order: pinned `projectOrder` first, then any project that isn't
+	// pinned yet (new projects) appended in their base order. Stable across reloads.
+	const projectList = useMemo(() => {
+		const indexByCwd = new Map(baseProjectList.map((p) => [p.cwd, p]));
+		const ordered: { cwd: string; tree: SessionTreeNode[] }[] = [];
+		const seen = new Set<string>();
+		// 1. Explicit pinned order (survives reloads, never reshuffles).
+		for (const cwd of projectOrder) {
+			const p = indexByCwd.get(cwd);
+			if (p && !seen.has(cwd)) {
+				ordered.push(p);
+				seen.add(cwd);
+			}
+		}
+		// 2. Anything not pinned yet (new projects) appended once at the end.
+		for (const p of baseProjectList) {
+			if (!seen.has(p.cwd)) {
+				ordered.push(p);
+				seen.add(p.cwd);
+			}
+		}
+		return ordered;
+	}, [baseProjectList, projectOrder]);
+
+	const moveProject = useCallback(
+		(fromCwd: string, toCwd: string) => {
+			if (fromCwd === toCwd) return;
+			setProjectOrder((prev) => {
+				const next = moveInList(prev, fromCwd, toCwd);
+				persistProjectOrder(next);
+				return next;
+			});
+			setDropTargetCwd(null);
+			setDragCwd(null);
+		},
+		[persistProjectOrder],
+	);
 
 	// Expanded/collapsed state of each project folder node
 	const [collapsedCwds, setCollapsedCwds] = useState<Record<string, boolean>>(
@@ -812,6 +912,43 @@ export function SessionSidebar({
 				>
 					<PiAgentTitle />
 					<div style={{ display: "flex", gap: 6 }}>
+						{/* 归档会话按钮:聚焦弹出所有被关闭项目下的会话,点单个会话还原 */}
+						<button
+							onClick={() => setArchivedOpen(true)}
+							title="归档会话"
+							style={{
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "center",
+								background: archivedOpen
+									? "rgba(37,99,235,0.12)"
+									: "var(--bg-hover)",
+								border: `1px solid ${archivedOpen ? "rgba(37,99,235,0.4)" : "var(--border)"}`,
+								color: archivedOpen ? "var(--accent)" : "var(--text-muted)",
+								cursor: "pointer",
+								width: 32,
+								height: 32,
+								borderRadius: 7,
+								padding: 0,
+								flexShrink: 0,
+								transition: "background 0.3s, color 0.3s, border-color 0.3s",
+							}}
+						>
+							<svg
+								width="15"
+								height="15"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							>
+								<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z" />
+								<path d="M9.2 13.2l2 2 3.6-3.6" />
+							</svg>
+							{/* 红点提示:有归档会话待处理 */}
+						</button>
 						{/* Refresh Sessions Button */}
 						<button
 							onClick={() => loadSessions(false)}
@@ -1613,7 +1750,44 @@ export function SessionSidebar({
 					const shortName = shortenCwd(cwd, homeDir);
 
 					return (
-						<div key={cwd} style={{ marginBottom: 12 }}>
+						<div
+							key={cwd}
+							style={{
+								marginBottom: 12,
+								opacity: dragCwd === cwd ? 0.4 : 1,
+								borderRadius: 6,
+								boxShadow:
+									dropTargetCwd === cwd && dragCwd && dragCwd !== cwd
+										? "inset 0 2px 0 var(--accent)"
+										: "none",
+								paddingTop:
+									dropTargetCwd === cwd && dragCwd && dragCwd !== cwd ? 3 : 0,
+							}}
+							draggable
+							onDragStart={(e) => {
+								e.dataTransfer.effectAllowed = "move";
+								e.dataTransfer.setData("text/plain", cwd);
+								setDragCwd(cwd);
+							}}
+							onDragOver={(e) => {
+								e.preventDefault();
+								e.dataTransfer.dropEffect = "move";
+								if (dragCwd && dragCwd !== cwd) setDropTargetCwd(cwd);
+							}}
+							onDragLeave={(e) => {
+								if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+								if (dragCwd && dropTargetCwd === cwd) setDropTargetCwd(null);
+							}}
+							onDrop={(e) => {
+								e.preventDefault();
+								const from = e.dataTransfer.getData("text/plain");
+								if (from) moveProject(from, cwd);
+							}}
+							onDragEnd={() => {
+								setDragCwd(null);
+								setDropTargetCwd(null);
+							}}
+						>
 							{/* CWD Folder Group Header */}
 							<div
 								onClick={() => {
@@ -1626,7 +1800,7 @@ export function SessionSidebar({
 									justifyContent: "space-between",
 									padding: "5px 6px",
 									borderRadius: 6,
-									cursor: "pointer",
+									cursor: dragCwd ? "grabbing" : "grab",
 									background: isActiveProject
 										? "rgba(37,99,235,0.06)"
 										: "transparent",
@@ -1701,7 +1875,7 @@ export function SessionSidebar({
 									</span>
 								</div>
 
-								{/* Row actions: New session in this project + hide workspace */}
+								{/* Row actions: drag handle + new session + hide workspace */}
 								<div
 									style={{
 										display: "flex",
@@ -1710,6 +1884,41 @@ export function SessionSidebar({
 										flexShrink: 0,
 									}}
 								>
+									<span
+										title="Drag to reorder"
+										style={{
+											width: 14,
+											height: 16,
+											display: "flex",
+											alignItems: "center",
+											justifyContent: "center",
+											color: "var(--text-dim)",
+											cursor: "grab",
+											opacity: dragCwd === cwd ? 0.5 : 0.55,
+										}}
+										onMouseEnter={(e) => {
+											e.currentTarget.style.color = "var(--accent)";
+											e.currentTarget.style.opacity = "1";
+										}}
+										onMouseLeave={(e) => {
+											e.currentTarget.style.color = "var(--text-dim)";
+											e.currentTarget.style.opacity = "0.55";
+										}}
+									>
+										<svg
+											width="10"
+											height="12"
+											viewBox="0 0 10 12"
+											fill="currentColor"
+										>
+											<circle cx="2.5" cy="2" r="1" />
+											<circle cx="7.5" cy="2" r="1" />
+											<circle cx="2.5" cy="6" r="1" />
+											<circle cx="7.5" cy="6" r="1" />
+											<circle cx="2.5" cy="10" r="1" />
+											<circle cx="7.5" cy="10" r="1" />
+										</svg>
+									</span>
 									<button
 										onClick={(e) => {
 											e.stopPropagation();
@@ -2178,6 +2387,227 @@ export function SessionSidebar({
 					</div>
 				</div>
 			)}
+
+			{archivedOpen && (
+				<div
+					style={{
+						position: "fixed",
+						inset: 0,
+						zIndex: 600,
+						background: "rgba(0,0,0,0.45)",
+						backdropFilter: "blur(4px)",
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+					}}
+					onClick={() => setArchivedOpen(false)}
+				>
+					<div
+						onClick={(e) => e.stopPropagation()}
+						style={{
+							width: 560,
+							maxWidth: "calc(100vw - 32px)",
+							maxHeight: "calc(100vh - 96px)",
+							display: "flex",
+							flexDirection: "column",
+							background: "var(--bg)",
+							border: "1px solid var(--border)",
+							borderRadius: 10,
+							boxShadow: "0 16px 48px rgba(0,0,0,0.25)",
+							overflow: "hidden",
+						}}
+					>
+						<div
+							style={{
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "space-between",
+								padding: "14px 16px 10px",
+								borderBottom: "1px solid var(--border)",
+								flexShrink: 0,
+							}}
+						>
+							<span
+								style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}
+							>
+								归档会话
+							</span>
+							<button
+								onClick={() => setArchivedOpen(false)}
+								title="Close"
+								style={{
+									display: "flex",
+									alignItems: "center",
+									justifyContent: "center",
+									width: 24,
+									height: 24,
+									border: "none",
+									background: "none",
+									color: "var(--text-dim)",
+									cursor: "pointer",
+									borderRadius: 4,
+								}}
+								onMouseEnter={(e) => {
+									e.currentTarget.style.color = "var(--text)";
+									e.currentTarget.style.background = "var(--bg-hover)";
+								}}
+								onMouseLeave={(e) => {
+									e.currentTarget.style.color = "var(--text-dim)";
+									e.currentTarget.style.background = "none";
+								}}
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2.5"
+									strokeLinecap="round"
+								>
+									<line x1="18" y1="6" x2="6" y2="18" />
+									<line x1="6" y1="6" x2="18" y2="18" />
+								</svg>
+							</button>
+						</div>
+						<div
+							style={{
+								flex: 1,
+								overflowY: "auto",
+								padding: "10px 12px",
+								scrollbarWidth: "thin",
+							}}
+						>
+							{(() => {
+								const hiddenList = Object.keys(hiddenCwds).filter(
+									(c) => !!hiddenCwds[c] && c.trim().length > 0,
+								);
+								const hiddenSet = new Set(hiddenList);
+								const archived = allSessions
+									.filter((s) => hiddenSet.has(s.cwd))
+									.sort((a, b) => b.modified.localeCompare(a.modified));
+								if (archived.length === 0) {
+									return (
+										<div
+											style={{
+												padding: "24px 12px",
+												fontSize: 12,
+												color: "var(--text-dim)",
+												fontStyle: "italic",
+											}}
+										>
+											没有归档会话
+										</div>
+									);
+								}
+								return archived.map((s) => {
+									const stitle =
+										s.name ||
+										s.firstMessage.slice(0, 50) ||
+										s.id.slice(0, 12);
+									return (
+										<button
+											key={s.id}
+											onClick={() => {
+												rememberCwd(s.cwd);
+												markSessionSeen(s.id);
+												onSelectSession(s);
+												setArchivedOpen(false);
+												loadSessions();
+											}}
+											style={{
+												display: "flex",
+												alignItems: "center",
+												gap: 8,
+												width: "100%",
+												padding: "8px 10px",
+												border: "none",
+												borderRadius: 6,
+												background: "none",
+												textAlign: "left",
+												cursor: "pointer",
+												transition: "background 0.12s",
+											}}
+											onMouseEnter={(e) =>
+												(e.currentTarget.style.background =
+													"var(--bg-selected)")
+											}
+											onMouseLeave={(e) =>
+												(e.currentTarget.style.background = "none")
+											}
+										>
+											<svg
+												width="12"
+												height="12"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="var(--accent)"
+												strokeWidth="2"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												style={{ flexShrink: 0 }}
+											>
+												<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+												<polyline points="7 10 12 15 17 10" />
+												<line x1="12" y1="15" x2="12" y2="3" />
+											</svg>
+											<div style={{ flex: 1, minWidth: 0 }}>
+												<div
+													style={{
+														fontSize: 10,
+														color: "var(--text-dim)",
+														overflow: "hidden",
+														textOverflow: "ellipsis",
+														whiteSpace: "nowrap",
+														marginBottom: 2,
+													}}
+													title={s.cwd}
+												>
+													{shortenCwd(s.cwd, homeDir)}
+												</div>
+												<div
+													style={{
+														fontSize: 12,
+														fontWeight: 500,
+														color: "var(--text)",
+														overflow: "hidden",
+														textOverflow: "ellipsis",
+														whiteSpace: "nowrap",
+													}}
+													title={stitle}
+												>
+													{stitle}
+												</div>
+												<div
+													style={{
+														fontSize: 11,
+														color: "var(--text-dim)",
+													}}
+												>
+													{formatRelativeTime(s.modified)} · {s.messageCount} msgs
+												</div>
+											</div>
+											<span
+												style={{
+													fontSize: 11,
+													fontWeight: 600,
+													color: "var(--accent)",
+													flexShrink: 0,
+												}}
+											>
+												还原
+											</span>
+										</button>
+									);
+								})
+								}
+								)
+								()
+								}
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -2253,6 +2683,42 @@ function SessionTreeItem({
 				</div>
 			)}
 		</div>
+	);
+}
+
+// Status dot shown before each session title: spinner while running, green when
+// completed, red when failed.
+function SessionStatusDot({ status }: { status: NonNullable<SessionInfo["status"]> }) {
+	if (status === "running") {
+		return (
+			<span
+				title="会话进行中"
+				style={{
+					width: 10,
+					height: 10,
+					flexShrink: 0,
+					border: "1.5px solid var(--border)",
+					borderTopColor: "var(--text-dim)",
+					borderRadius: "50%",
+					boxSizing: "border-box",
+					animation: "spin 0.9s linear infinite",
+				}}
+			/>
+		);
+	}
+	const failed = status === "failed";
+	return (
+		<span
+			title={failed ? "会话失败" : "会话已完成"}
+			style={{
+				width: 7,
+				height: 7,
+				borderRadius: "50%",
+				flexShrink: 0,
+				background: failed ? "#f87171" : "#4ade80",
+				boxShadow: `0 0 0 2px ${failed ? "rgba(248,113,113,0.18)" : "rgba(74,222,128,0.18)"}`,
+			}}
+		/>
 	);
 }
 
@@ -2507,25 +2973,17 @@ function SessionItem({
 							<path d="M18 9a9 9 0 0 1-9 9" />
 						</svg>
 					)}
-					{/* Session terminal-status dot: green = done, red = failed. Shows only
-					    for running-session-excluded, currently-unselected sessions with an
+					{/* Session status dot: spinner ring while running (also when streaming in
+					    this tab); terminal green/red only for unselected sessions with an
 					    unviewed result (clears once you switch to / view it). */}
-					{session.status &&
+					{session.id === runningSessionId ? (
+						<SessionStatusDot status="running" />
+					) : (
+						session.status &&
 						!isSelected &&
-						session.id !== runningSessionId &&
 						session.modified > (seenAt[session.id] ?? "") && (
-						<span
-							title={session.status === "failed" ? "会话失败" : "会话已完成"}
-							style={{
-								width: 7,
-								height: 7,
-								borderRadius: "50%",
-								flexShrink: 0,
-								background:
-									session.status === "failed" ? "#f87171" : "#4ade80",
-								boxShadow: `0 0 0 2px ${session.status === "failed" ? "rgba(248,113,113,0.18)" : "rgba(74,222,128,0.18)"}`,
-							}}
-						/>
+							<SessionStatusDot status={session.status} />
+						)
 					)}
 					<div style={{ flex: 1, minWidth: 0 }}>
 						<div

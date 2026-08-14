@@ -166,7 +166,7 @@ export function AppShell() {
   }, [router]);
 
   const handleStreamingChange = useCallback((sessionId: string | null) => {
-    // Front-end knows which session is actually streaming; suppress its dot.
+    // Front-end knows which session is actually streaming; show its spinner dot.
     setRunningSessionId(sessionId);
   }, []);
 
@@ -178,6 +178,13 @@ export function AppShell() {
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
+  }, []);
+
+  // Refresh the list when a new session's first assistant message lands on disk.
+  // The new session's .jsonl file isn't written until that moment, so this makes
+  // it appear in the sidebar immediately instead of waiting for agent_end.
+  const handleSessionContent = useCallback(() => {
+    setRefreshKey((k) => k + 1);
   }, []);
 
   const handleSessionForked = useCallback((newSessionId: string) => {
@@ -349,7 +356,10 @@ export function AppShell() {
             background: "var(--bg-panel)",
             transition: sidebar.dragging ? "none" : "background 0.15s",
             position: "relative",
-            zIndex: 201,
+            // 保持低于 sidebar-container(zIndex:200) 的层叠上下文,避免这条竖线
+            // 盖住渲染在侧边栏内部的 "Add Project Directory" 弹窗(zIndex:500)。
+            // 二者在空间上不重叠,降低后不影响拖拽手柄本身。
+            zIndex: 50,
           }}
           onMouseEnter={(e) => { if (!sidebar.dragging) e.currentTarget.style.background = "var(--bg-hover)"; }}
           onMouseLeave={(e) => { if (!sidebar.dragging) e.currentTarget.style.background = "var(--bg-panel)"; }}
@@ -395,6 +405,7 @@ export function AppShell() {
               onAgentEnd={handleAgentEnd}
               onStreamingChange={handleStreamingChange}
               onSessionCreated={handleSessionCreated}
+              onSessionContent={handleSessionContent}
               onSessionForked={handleSessionForked}
               modelsRefreshKey={modelsRefreshKey}
               chatInputRef={chatInputRef}
