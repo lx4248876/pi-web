@@ -1,6 +1,6 @@
 "use client";
 
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {AgentMessage, SessionInfo, SessionTreeNode} from "@/lib/types";
 import {MessageView} from "./MessageView";
 import {ChatInput, type ChatInputHandle} from "./ChatInput";
@@ -17,7 +17,9 @@ import {useDragDrop} from "@/hooks/useDragDrop";
 interface Props {
     session: SessionInfo | null;
     newSessionCwd: string | null;
+    onAgentStart?: () => void;
     onAgentEnd?: () => void;
+    onStreamingChange?: (sessionId: string | null) => void;
     onSessionCreated?: (session: SessionInfo) => void;
     onSessionForked?: (newSessionId: string) => void;
     modelsRefreshKey?: number;
@@ -115,16 +117,21 @@ function ExtensionUIDialog({
 }: {
     request: Extract<
         ExtensionUIRequest,
-        { method: "select" | "confirm" | "input" | "editor" }
+        { method: "select" | "confirm" | "input" | "editor" | "multiple" }
     >;
     onResponse: (response: ExtensionUIResponse) => void;
 }) {
     const [value, setValue] = useState(
         request.method === "editor" ? (request.prefill ?? "") : "",
     );
+    // 多问题：每个问题各自的选中项（有 options 的）与文本输入（无 options 的）
+    const [selections, setSelections] = useState<Record<number, string>>({});
+    const [inputs, setInputs] = useState<Record<number, string>>({});
 
     useEffect(() => {
         setValue(request.method === "editor" ? (request.prefill ?? "") : "");
+        setSelections({});
+        setInputs({});
     }, [
         request.id,
         request.method,
@@ -139,6 +146,29 @@ function ExtensionUIDialog({
         });
     const submitValue = () =>
         onResponse({type: "extension_ui_response", id: request.id, value});
+
+    // 多问题：校验每问都已作答，按序收集答案数组回传
+    const multipleAnswered = useMemo(() => {
+        if (request.method !== "multiple") return true;
+        return request.questions.every((q, qi) =>
+            q.options && q.options.length > 0
+                ? Boolean(selections[qi])
+                : Boolean((inputs[qi] ?? "").trim()),
+        );
+    }, [request, selections, inputs]);
+    const submitMultiple = () => {
+        if (request.method !== "multiple") return;
+        const answers = request.questions.map((q, qi) =>
+            q.options && q.options.length > 0
+                ? selections[qi] ?? ""
+                : (inputs[qi] ?? "").trim(),
+        );
+        onResponse({
+            type: "extension_ui_response",
+            id: request.id,
+            value: answers,
+        });
+    };
 
     return (
         <div
@@ -199,10 +229,80 @@ function ExtensionUIDialog({
                                     borderRadius: 6,
                                     padding: "9px 10px",
                                     color: "var(--text)",
+                                    // 选项文本可能带 "\n"（label 后拼接的 description），
+                                    // 保留换行渲染成 option 的第二行说明，而不是缩成一个长标签。
+                                    whiteSpace: "pre-line",
+                                    lineHeight: 1.5,
                                 }}
                             >
                                 {option}
                             </button>
+                        ))}
+                    </div>
+                )}
+
+                {request.method === "multiple" && (
+                    <div className="flex flex-col gap-4">
+                        {request.questions.map((q, qi) => (
+                            <div key={qi} className="flex flex-col gap-2">
+                                <div
+                                    className="text-sm font-semibold"
+                                    style={{ color: "var(--text)" }}
+                                >
+                                    {qi + 1}. {q.question}
+                                </div>
+                                {q.options && q.options.length > 0 ? (
+                                    <div className="flex flex-col gap-2">
+                                        {q.options.map((opt) => {
+                                            const selected = selections[qi] === opt;
+                                            return (
+                                                <button
+                                                    key={opt}
+                                                    onClick={() =>
+                                                        setSelections((s) => ({
+                                                            ...s,
+                                                            [qi]: opt,
+                                                        }))
+                                                    }
+                                                    className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-hover)]"
+                                                    style={{
+                                                        border: selected
+                                                            ? "1px solid var(--accent)"
+                                                            : "1px solid var(--border)",
+                                                        borderRadius: 6,
+                                                        padding: "9px 10px",
+                                                        color: "var(--text)",
+                                                        whiteSpace: "pre-line",
+                                                        lineHeight: 1.5,
+                                                    }}
+                                                >
+                                                    {opt}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <input
+                                        value={inputs[qi] ?? ""}
+                                        placeholder={q.placeholder}
+                                        onChange={(e) =>
+                                            setInputs((s) => ({ ...s, [qi]: e.target.value }))
+                                        }
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") submitMultiple();
+                                            if (e.key === "Escape") cancel();
+                                        }}
+                                        className="w-full text-sm outline-none"
+                                        style={{
+                                            background: "var(--bg)",
+                                            border: "1px solid var(--border)",
+                                            borderRadius: 6,
+                                            color: "var(--text)",
+                                            padding: "9px 10px",
+                                        }}
+                                    />
+                                )}
+                            </div>
                         ))}
                     </div>
                 )}
@@ -308,6 +408,28 @@ function ExtensionUIDialog({
                                 Yes
                             </button>
                         </>
+                    ) : request.method === "multiple" ? (
+                        <button
+                            onClick={submitMultiple}
+                            disabled={!multipleAnswered}
+                            className="text-sm"
+                            style={{
+                                border: "1px solid var(--accent)",
+                                borderRadius: 6,
+                                background: multipleAnswered
+                                    ? "var(--accent)"
+                                    : "var(--bg-selected)",
+                                color: multipleAnswered
+                                    ? "white"
+                                    : "var(--text-muted)",
+                                padding: "7px 12px",
+                                cursor: multipleAnswered
+                                    ? "pointer"
+                                    : "not-allowed",
+                            }}
+                        >
+                            {multipleAnswered ? "提交" : "请完成所有问题"}
+                        </button>
                     ) : request.method !== "select" ? (
                         <button
                             onClick={submitValue}
@@ -333,7 +455,9 @@ function ExtensionUIDialog({
 export function ChatWindow({
                                session,
                                newSessionCwd,
+                               onAgentStart,
                                onAgentEnd,
+                               onStreamingChange,
                                onSessionCreated,
                                onSessionForked,
                                modelsRefreshKey,
@@ -385,6 +509,7 @@ export function ChatWindow({
     } = useAgentSession({
         session,
         newSessionCwd,
+        onAgentStart,
         onAgentEnd,
         onSessionCreated,
         onSessionForked,
@@ -492,6 +617,12 @@ export function ChatWindow({
         (m) => m.role === "user" || m.role === "assistant",
     );
     const messageRefs = useMessageRefs(visibleMessages.length);
+
+    // Report this session's streaming state to the shell so the sidebar can
+    // suppress its terminal dot while it is actually running (no polling).
+    useEffect(() => {
+        onStreamingChange?.(agentRunning ? (session?.id ?? null) : null);
+    }, [agentRunning, session?.id, onStreamingChange]);
 
     const isEmptyNew =
         isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
@@ -769,6 +900,10 @@ export function ChatWindow({
                                                 message={msg}
                                                 toolResults={toolResultsMap}
                                                 modelNames={modelNames}
+                                                toolContext={{
+                                                    sessionId: session?.id,
+                                                    cwd: session?.cwd ?? newSessionCwd ?? undefined,
+                                                }}
                                                 entryId={entryIds[idx]}
                                                 onFork={
                                                     agentRunning ||

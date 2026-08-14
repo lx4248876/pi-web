@@ -2,6 +2,7 @@ import { SessionManager, buildSessionContext as piBuildSessionContext, getAgentD
 import type { SessionEntry, SessionInfo, SessionContext, SessionTreeNode, AssistantMessage } from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 export { getAgentDir };
 
@@ -9,7 +10,94 @@ export function getSessionsDir(): string {
   return `${getAgentDir()}/sessions`;
 }
 
-export async function listAllSessions(): Promise<SessionInfo[]> {
+// ─── Session terminal status ────────────────────────────────────────────────
+// Derived from the trailing entries of a session file (read only, tail window), so the
+// list can cheaply tell whether each session ended OK (green dot) or failed (red dot).
+// Returns null for empty / still-running sessions (no dot).
+
+const STATUS_TAIL_BYTES = 128 * 1024;
+
+type SessionStatus = "completed" | "failed" | null;
+
+function readFileTail(filePath: string): string | null {
+  try {
+    const { size } = statSync(filePath);
+    if (size <= STATUS_TAIL_BYTES) {
+      return readFileSync(filePath, "utf8");
+    }
+    const fd = openSync(filePath, "r");
+    try {
+      const buf = Buffer.alloc(STATUS_TAIL_BYTES);
+      const bytesRead = readSync(fd, buf, 0, STATUS_TAIL_BYTES, size - STATUS_TAIL_BYTES);
+      return buf.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+// Determine the session's terminal status from the last message entry.
+interface ClientMessageLike {
+  role?: string;
+  errorMessage?: string;
+  content?: unknown;
+  isError?: boolean;
+}
+
+function deriveStatusFromMessage(msg: ClientMessageLike | undefined | null): SessionStatus {
+  if (!msg) return null;
+  const role = msg.role;
+
+  if (role === "assistant") {
+    if (msg.errorMessage) return "failed";
+    const content: unknown[] = Array.isArray(msg.content) ? msg.content : [];
+    const hasPendingToolCall = content.some(
+      (b) => (b as { type?: string } | null | undefined)?.type === "toolCall",
+    );
+    if (hasPendingToolCall) return null; // awaiting a tool result / still running
+    const hasText = content.some(
+      (b) => {
+        const block = b as { type?: string; text?: unknown } | null | undefined;
+        return block?.type === "text" && typeof block.text === "string" && block.text.trim().length > 0;
+      },
+    );
+    return hasText ? "completed" : null;
+  }
+
+  if (role === "toolResult") {
+    return msg.isError ? "failed" : null; // an OK tool result with no following message = mid-run
+  }
+
+  if (role === "user") return "completed";
+  return null;
+}
+
+export function readSessionStatus(filePath: string): SessionStatus {
+  const tail = readFileTail(filePath);
+  if (tail === null) return null;
+
+  let lastMessage: ClientMessageLike | null = null;
+  for (const line of tail.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let entry: { type?: unknown; message?: ClientMessageLike };
+    try {
+      entry = JSON.parse(trimmed) as { type?: unknown; message?: ClientMessageLike };
+    } catch {
+      continue; // line straddling the tail cut-off
+    }
+    if (entry?.type !== "message" || !entry.message) continue;
+    lastMessage = entry.message;
+  }
+  return deriveStatusFromMessage(lastMessage);
+}
+
+export async function listAllSessions(options?: {
+  /** Ids of sessions currently live in the process; their terminal dot is suppressed. */
+  runningSessionIds?: Set<string>;
+}): Promise<SessionInfo[]> {
   const piSessions: PiSessionInfo[] = await SessionManager.listAll();
   const pathToId = new Map<string, string>();
   for (const s of piSessions) pathToId.set(s.path, s.id);
@@ -18,6 +106,8 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
   return piSessions.map((s) => {
     // Populate path cache so resolveSessionPath works without a full scan
     cache.set(s.id, s.path);
+    // A still-live session is running/open: don't show a terminal done/failed dot yet.
+    const running = !!options?.runningSessionIds?.has(s.id);
     return {
       path: s.path,
       id: s.id,
@@ -28,6 +118,7 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
       messageCount: s.messageCount,
       firstMessage: s.firstMessage || "(no messages)",
       parentSessionId: s.parentSessionPath ? pathToId.get(s.parentSessionPath) : undefined,
+      status: running ? undefined : readSessionStatus(s.path) ?? undefined,
     };
   });
 }

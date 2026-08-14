@@ -36,6 +36,13 @@ async function loadRpcManagerInternals() {
 			if (specifier === "typebox") return { Type: new Proxy({}, { get: () => () => ({}) }) };
 			if (specifier === "./session-reader") return { cacheSessionPath: () => {} };
 			if (specifier === "./tool-composition") return { composeActiveTools: () => [] };
+			if (specifier === "./question-options")
+				return {
+					readQuestionRequest: () => ({ title: "", question: "", options: [] }),
+					resolveQuestionParts: () => [
+						{ title: "", question: "", options: [] },
+					],
+				};
 			throw new Error(`Unexpected require: ${specifier}`);
 		},
 		setTimeout,

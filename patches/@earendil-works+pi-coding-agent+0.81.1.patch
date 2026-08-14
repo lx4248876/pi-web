@@ -1,0 +1,17 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js b/node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js
+index dfb0dab..9aa555d 100644
+--- a/node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js
+@@ -55,6 +55,12 @@ export function normalizePath(input, options = {}) {
+     if (/^file:\/\//.test(normalized)) {
+         return fileURLToPath(normalized);
+     }
++    if (process.platform === "win32" && /^\/([a-zA-Z])(\/|\\|$)/.test(normalized)) {
++        // MSYS/Git Bash drive-path prefix: /c/foo -> c:/foo. Without this, win32
++        // path.resolve treats the leading / as the current drive root and would
++        // resolve /c/foo to C:\\c\\foo (ENOENT). Single-letter drive only.
++        normalized = normalized.replace(/^\/([a-zA-Z])(\/|\\|$)/, "$1:$2");
++    }
+     return normalized;
+ }
+ export function resolvePath(input, baseDir = process.cwd(), options = {}) {

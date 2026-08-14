@@ -77,3 +77,6 @@ next-env.d.ts
 /.web-verify/
 # 杂项缓存
 /.ruff_cache/
+
+# 编辑器/agent 计划产物
+/.zcode/

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runNpx } from "@/lib/npx";
+import { clearSkillsCache } from "@/lib/skills-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,8 @@ export async function POST(req: Request) {
     if (!success) {
       return NextResponse.json({ error: output.slice(-300) || "Install failed" }, { status: 500 });
     }
+    // A fresh skill is now on disk; drop the cached scan so it appears immediately.
+    clearSkillsCache();
     return NextResponse.json({ success: true, output });
   } catch (e: unknown) {
     const err = e as { stdout?: string; stderr?: string; message?: string };

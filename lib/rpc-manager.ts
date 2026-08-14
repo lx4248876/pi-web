@@ -15,6 +15,10 @@ import { Type } from "typebox";
 import { cacheSessionPath } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 import { composeActiveTools } from "./tool-composition";
+import {
+	resolveQuestionParts,
+	type ResolvedQuestionPart,
+} from "./question-options";
 
 // ============================================================================
 // Loop Detection Constants
@@ -60,7 +64,8 @@ function isDialogRequestEvent(event: AgentEvent): boolean {
 		(event.method === "select" ||
 			event.method === "confirm" ||
 			event.method === "input" ||
-			event.method === "editor")
+			event.method === "editor" ||
+			event.method === "multiple")
 	);
 }
 
@@ -165,62 +170,6 @@ export function guardRpcExtensionStartupHandlers(
 	}
 }
 
-function asNonEmptyString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeUiOptions(value: unknown): string[] {
-	if (!Array.isArray(value)) return [];
-	return value
-		.map((item) => {
-			if (typeof item === "string") return item.trim();
-			if (item && typeof item === "object") {
-				const record = item as Record<string, unknown>;
-				return (
-					asNonEmptyString(record.label) ??
-					asNonEmptyString(record.value) ??
-					asNonEmptyString(record.description)
-				);
-			}
-			return undefined;
-		})
-		.filter((item): item is string => Boolean(item));
-}
-
-function firstQuestionRecord(
-	params: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-	const questions = params.questions;
-	if (!Array.isArray(questions)) return undefined;
-	const first = questions[0];
-	return first && typeof first === "object"
-		? (first as Record<string, unknown>)
-		: undefined;
-}
-
-function readQuestionRequest(params: Record<string, unknown>) {
-	const firstQuestion = firstQuestionRecord(params);
-	const title =
-		asNonEmptyString(params.title) ??
-		asNonEmptyString(params.header) ??
-		asNonEmptyString(firstQuestion?.header) ??
-		"User input";
-	const question =
-		asNonEmptyString(params.question) ??
-		asNonEmptyString(params.message) ??
-		asNonEmptyString(firstQuestion?.question) ??
-		title;
-	const placeholder =
-		asNonEmptyString(params.placeholder) ??
-		asNonEmptyString(firstQuestion?.placeholder) ??
-		undefined;
-	const options =
-		normalizeUiOptions(params.options).length > 0
-			? normalizeUiOptions(params.options)
-			: normalizeUiOptions(firstQuestion?.options);
-
-	return { title, question, placeholder, options };
-}
 
 const uiQuestionParameters = Type.Object({
 	title: Type.Optional(Type.String({ description: "Dialog title" })),
@@ -252,16 +201,29 @@ function createCompatUiTools(): ToolDefinition[] {
 		_onUpdate: unknown,
 		ctx: { ui: ExtensionUIContext },
 	) => {
-		const { title, question, placeholder, options } =
-			readQuestionRequest(rawParams);
+		// 多问（questions[] 长度 > 1）：一次弹窗展示全部问题，后端按序拿回答案数组；
+		// 单问走原 select/input 路径不变。
+		const parts = resolveQuestionParts(rawParams);
+		if (parts.length > 1) {
+			const answers = await (ctx.ui as UiContextWithMultiple).multiple(parts, {
+				signal,
+			});
+			if (answers === undefined) return textResult("User cancelled.");
+			const lines = parts.map(
+				(part, i) => `${part.question} -> ${answers[i] ?? ""}`,
+			);
+			return textResult(`User answered:\n${lines.join("\n")}`);
+		}
+
+		const part = parts[0];
 		const value =
-			options.length > 0
-				? await ctx.ui.select(question, options, { signal })
-				: await ctx.ui.input(question, placeholder, { signal });
+			part.options.length > 0
+				? await ctx.ui.select(part.question, part.options, { signal })
+				: await ctx.ui.input(part.question, part.placeholder, { signal });
 
 		if (value === undefined) return textResult("User cancelled.");
 		return textResult(
-			options.length > 0
+			part.options.length > 0
 				? `User selected: ${value}`
 				: `User answered: ${value}`,
 		);
@@ -295,6 +257,15 @@ function createCompatUiTools(): ToolDefinition[] {
 // AgentSessionWrapper
 // Wraps AgentSession with the same interface the rest of the app expects
 // ============================================================================
+
+// pi-web 自持 UI 上下文。在 SDK 泛型通道之上再暴露一个 `multiple`：把多个问题
+// 一次性发成一个 extension_ui_request，前端单面板渲染后回 value: string[]。
+type UiContextWithMultiple = ExtensionUIContext & {
+	multiple: (
+		questions: ResolvedQuestionPart[],
+		opts?: ExtensionUIDialogOptions,
+	) => Promise<string[] | undefined>;
+};
 
 export class AgentSessionWrapper {
 	private listeners: EventListener[] = [];
@@ -429,7 +400,7 @@ export class AgentSessionWrapper {
 		});
 	}
 
-	createExtensionUIContext(): ExtensionUIContext {
+	createExtensionUIContext(): UiContextWithMultiple {
 		return {
 			select: (title, options, opts) =>
 				this.createDialogPromise(
@@ -442,6 +413,28 @@ export class AgentSessionWrapper {
 							: "value" in response
 								? response.value
 								: undefined,
+				),
+			multiple: (
+				questions: ResolvedQuestionPart[],
+				opts?: ExtensionUIDialogOptions,
+			) =>
+				this.createDialogPromise<string[] | undefined>(
+					opts,
+					undefined,
+					{
+						method: "multiple",
+						title: `请回答以下 ${questions.length} 个问题`,
+						questions,
+						timeout: opts?.timeout,
+					},
+					(response) => {
+						if ("cancelled" in response && response.cancelled)
+							return undefined;
+						const v: unknown =
+							"value" in response ? response.value : undefined;
+						if (Array.isArray(v)) return v as string[];
+						return undefined;
+					},
 				),
 			confirm: (title, message, opts) =>
 				this.createDialogPromise(
@@ -554,7 +547,7 @@ export class AgentSessionWrapper {
 			}),
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
-		} as ExtensionUIContext;
+		} as UiContextWithMultiple;
 	}
 
 	private resetIdleTimer(): void {
@@ -1095,6 +1088,21 @@ export function getRpcSession(
 	sessionId: string,
 ): AgentSessionWrapper | undefined {
 	return getRegistry().get(sessionId);
+}
+
+/**
+ * Sessions currently streaming (actively running) in this process.
+ *
+ * The terminal done/failed dot is suppressed only for these, so a session that's
+ * still being written to doesn't show a premature green/red dot. Sessions that are
+ * merely open-but-idle still show their file-derived status.
+ */
+export function getActiveRpcSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, wrapper] of getRegistry()) {
+    if (wrapper.inner.isStreaming) ids.add(id);
+  }
+  return ids;
 }
 
 /**

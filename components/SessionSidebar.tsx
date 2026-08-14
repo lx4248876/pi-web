@@ -26,6 +26,8 @@ interface Props {
 	onOpenFile?: (filePath: string, fileName: string) => void;
 	explorerRefreshKey?: number;
 	onAtMention?: (relativePath: string) => void;
+	// Session currently streaming; its terminal dot is suppressed while running.
+	runningSessionId?: string | null;
 }
 
 interface BrowseDirEntry {
@@ -279,6 +281,7 @@ export function SessionSidebar({
 	onOpenFile,
 	explorerRefreshKey,
 	onAtMention,
+	runningSessionId,
 }: Props) {
 	const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
 	const [loading, setLoading] = useState(true);
@@ -322,6 +325,39 @@ export function SessionSidebar({
 		}
 		return {};
 	});
+
+	// Last time the user viewed each session (persisted) — drives the transient
+	// dot: a dot shows only for sessions with a completed/failed result newer than
+	// the last time it was viewed, and it clears once you switch to / view it.
+	const [seenAt, setSeenAt] = useState<Record<string, string>>(() => {
+		if (typeof window !== "undefined") {
+			try {
+				const stored = localStorage.getItem("pi-session-seen");
+				if (stored) return JSON.parse(stored);
+			} catch {}
+		}
+		return {};
+	});
+
+	const persistSeenAt = useCallback((next: Record<string, string>) => {
+		try {
+			window.localStorage.setItem("pi-session-seen", JSON.stringify(next));
+		} catch {}
+	}, []);
+
+	// Guard so we only seed historical sessions as "seen" on the very first load.
+	const seenSeededRef = useRef(false);
+
+	const markSessionSeen = useCallback(
+		(sessionId: string) => {
+			setSeenAt((prev) => {
+				const next = { ...prev, [sessionId]: new Date().toISOString() };
+				persistSeenAt(next);
+				return next;
+			});
+		},
+		[persistSeenAt],
+	);
 
 	const hideProjectCwd = useCallback(
 		(cwd: string) => {
@@ -496,29 +532,51 @@ export function SessionSidebar({
 		};
 	}, []);
 
-	const loadSessions = useCallback(async (showLoading = false) => {
-		try {
-			if (showLoading) setLoading(true);
-			const res = await fetch("/api/sessions");
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			const data = (await res.json()) as { sessions: SessionInfo[] };
-			setAllSessions(data.sessions);
-			setError(null);
-			if (!showLoading) {
-				setSessionRefreshDone(true);
-				if (sessionRefreshTimerRef.current)
-					clearTimeout(sessionRefreshTimerRef.current);
-				sessionRefreshTimerRef.current = setTimeout(
-					() => setSessionRefreshDone(false),
-					2000,
-				);
+	const loadSessions = useCallback(
+		async (showLoading = false, opts?: { silent?: boolean }) => {
+			try {
+				if (showLoading) setLoading(true);
+				const res = await fetch("/api/sessions");
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = (await res.json()) as { sessions: SessionInfo[] };
+				setAllSessions(data.sessions);
+				// First-ever load: treat all pre-existing sessions as already-viewed so
+				// historical completions don't all light up at once — dots only reflect
+				// NEW completions from now on.
+				if (!seenSeededRef.current) {
+					seenSeededRef.current = true;
+					try {
+						if (!window.localStorage.getItem("pi-session-seen-init")) {
+							const seed: Record<string, string> = {};
+							for (const s of data.sessions) seed[s.id] = s.modified;
+							setSeenAt(seed);
+							persistSeenAt(seed);
+							window.localStorage.setItem("pi-session-seen-init", "1");
+						}
+					} catch {}
+				}
+				setError(null);
+				// Silent refreshes (e.g. status polling) skip the refresh-check flash.
+				if (!showLoading && !opts?.silent) {
+					setSessionRefreshDone(true);
+					if (sessionRefreshTimerRef.current)
+						clearTimeout(sessionRefreshTimerRef.current);
+					sessionRefreshTimerRef.current = setTimeout(
+						() => setSessionRefreshDone(false),
+						2000,
+					);
+				}
+			} catch (e) {
+				setError(String(e));
+			} finally {
+				if (showLoading) setLoading(false);
 			}
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			if (showLoading) setLoading(false);
-		}
-	}, []);
+		},
+		[],
+	);
+
+	// Session dots update through explicit events (agent start/end and session
+	// select), not background polling.
 
 	const initialLoadDone = useRef(false);
 	useEffect(() => {
@@ -612,6 +670,16 @@ export function SessionSidebar({
 		setBrowseOpen(true);
 		await loadBrowseEntries(selectedCwdProp ?? selectedCwd ?? null);
 	}, [loadBrowseEntries, selectedCwd, selectedCwdProp]);
+
+	const handleSessionSelect = useCallback(
+		(session: SessionInfo) => {
+			// Viewing the session clears its transient dot, and refreshes the list.
+			markSessionSeen(session.id);
+			onSelectSession(session);
+			loadSessions();
+		},
+		[onSelectSession, loadSessions, markSessionSeen],
+	);
 
 	const handleNewSessionFor = useCallback(
 		(cwd: string) => {
@@ -1754,7 +1822,9 @@ export function SessionSidebar({
 												key={node.session.id}
 												node={node}
 												selectedSessionId={selectedSessionId}
-												onSelectSession={onSelectSession}
+												onSelectSession={handleSessionSelect}
+												runningSessionId={runningSessionId}
+												seenAt={seenAt}
 												onRenamed={loadSessions}
 												onSessionDeleted={(id, cwd) => {
 													onSessionDeleted?.(id, cwd);
@@ -2118,6 +2188,8 @@ function SessionTreeItem({
 	onSelectSession,
 	onRenamed,
 	onSessionDeleted,
+	runningSessionId,
+	seenAt,
 	depth,
 }: {
 	node: SessionTreeNode;
@@ -2125,6 +2197,8 @@ function SessionTreeItem({
 	onSelectSession: (s: SessionInfo) => void;
 	onRenamed?: () => void;
 	onSessionDeleted?: (id: string, cwd: string) => void;
+	runningSessionId?: string | null;
+	seenAt?: Record<string, string>;
 	depth: number;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
@@ -2153,6 +2227,8 @@ function SessionTreeItem({
 					onClick={() => onSelectSession(node.session)}
 					onRenamed={onRenamed}
 					onDeleted={(id, cwd) => onSessionDeleted?.(id, cwd)}
+					runningSessionId={runningSessionId}
+					seenAt={seenAt}
 					depth={depth}
 					hasChildren={hasChildren}
 					collapsed={collapsed}
@@ -2169,6 +2245,8 @@ function SessionTreeItem({
 							onSelectSession={onSelectSession}
 							onRenamed={onRenamed}
 							onSessionDeleted={onSessionDeleted}
+							runningSessionId={runningSessionId}
+							seenAt={seenAt}
 							depth={depth + 1}
 						/>
 					))}
@@ -2184,6 +2262,8 @@ function SessionItem({
 	onClick,
 	onRenamed,
 	onDeleted,
+	runningSessionId,
+	seenAt = {},
 	depth = 0,
 	hasChildren = false,
 	collapsed = false,
@@ -2194,6 +2274,8 @@ function SessionItem({
 	onClick: () => void;
 	onRenamed?: () => void;
 	onDeleted?: (id: string, cwd: string) => void;
+	runningSessionId?: string | null;
+	seenAt?: Record<string, string>;
 	depth?: number;
 	hasChildren?: boolean;
 	collapsed?: boolean;
@@ -2424,6 +2506,26 @@ function SessionItem({
 							<circle cx="6" cy="18" r="3" />
 							<path d="M18 9a9 9 0 0 1-9 9" />
 						</svg>
+					)}
+					{/* Session terminal-status dot: green = done, red = failed. Shows only
+					    for running-session-excluded, currently-unselected sessions with an
+					    unviewed result (clears once you switch to / view it). */}
+					{session.status &&
+						!isSelected &&
+						session.id !== runningSessionId &&
+						session.modified > (seenAt[session.id] ?? "") && (
+						<span
+							title={session.status === "failed" ? "会话失败" : "会话已完成"}
+							style={{
+								width: 7,
+								height: 7,
+								borderRadius: "50%",
+								flexShrink: 0,
+								background:
+									session.status === "failed" ? "#f87171" : "#4ade80",
+								boxShadow: `0 0 0 2px ${session.status === "failed" ? "rgba(248,113,113,0.18)" : "rgba(74,222,128,0.18)"}`,
+							}}
+						/>
 					)}
 					<div style={{ flex: 1, minWidth: 0 }}>
 						<div

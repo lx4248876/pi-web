@@ -33,6 +33,9 @@ interface TopBarProps {
     showGit: boolean;
     gitActive: boolean;
     onOpenGit: () => void;
+    // file viewer (right panel)
+    filesOpen: boolean;
+    onOpenFiles: () => void;
     // chat-only tools (branch navigator + system button + stats)
     showChatTools: boolean;
     // branch navigator
@@ -49,7 +52,7 @@ interface TopBarProps {
 }
 
 /**
- * 顶部 36px 操作条:sidebar 开关、主题、终端、Git、分支导航、System 下拉、token/费用/上下文统计。
+ * 顶部 36px 操作条:sidebar 开关、主题、终端、文件查看器、Git、分支导航、System 下拉、token/费用/上下文统计。
  * topBarRef 从 AppShell 透传(双重用途:ResizeObserver 定位下拉 + 给 BranchNavigator 当锚点)。
  * 从 AppShell 抽出的纯渲染块,所有状态由 AppShell 持有并经 props 下传。
  */
@@ -65,6 +68,8 @@ export function TopBar(props: TopBarProps) {
         showGit,
         gitActive,
         onOpenGit,
+        filesOpen,
+        onOpenFiles,
         showChatTools,
         branchTree,
         branchActiveLeafId,
@@ -256,6 +261,47 @@ export function TopBar(props: TopBarProps) {
                 >
                     <polyline points="4 17 10 11 4 5"/>
                     <line x1="12" y1="19" x2="20" y2="19"/>
+                </svg>
+            </button>
+            {/* File viewer toggle */}
+            <button
+                onClick={onOpenFiles}
+                title={filesOpen ? "Hide file viewer" : "Open file viewer"}
+                aria-label={filesOpen ? "Hide file viewer" : "Open file viewer"}
+                style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 36,
+                    height: 36,
+                    padding: 0,
+                    background: "none",
+                    border: "none",
+                    borderRight: "1px solid var(--border)",
+                    color: filesOpen ? "var(--text)" : "var(--text-muted)",
+                    flexShrink: 0,
+                    transition: "color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                    e.currentTarget.style.color = "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.color = filesOpen
+                        ? "var(--text)"
+                        : "var(--text-muted)";
+                }}
+            >
+                <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                >
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                 </svg>
             </button>
             {/* Git button */}

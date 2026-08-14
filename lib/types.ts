@@ -181,6 +181,9 @@ export interface SessionInfo {
   messageCount: number;
   firstMessage: string;
   parentSessionId?: string; // set if this session was forked from another
+  // Terminal status of the session: "completed" (green) or "failed" (red).
+  // Omitted/undefined for running or empty sessions (no dot shown).
+  status?: "completed" | "failed";
 }
 
 export interface SessionContext {

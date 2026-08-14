@@ -8,6 +8,7 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Type check: `node_modules/.bin/tsc --noEmit`.
 - Lint: `npm run lint`.
 - Tests: `npm test`（原生 `.mjs` + 经 jiti 的 `.ts`；新增 `.ts` 测试需 `node --import jiti/register --test`）。
+- Package manager is **npm**. Do not use `bun install`/`bun.lock` in this repo: the `postinstall: patch-package` step (in `patches/`) only runs under npm, and skipping it silently drops the MSYS-path and other dependency patches.
 - Do not run `next build` during normal local agent work. It writes `.next/` output that can confuse hot reload and local path resolution.
 
 ## Debug Artifacts
@@ -31,6 +32,12 @@ Keep this file short: it is loaded into every agent turn for this project.
   - `tsconfig.tsbuildinfo`
   - `research-report.json`
 - Avoid broad `grep`, `find`, `sed`, `cat`, or shell loops that dump source into context. Read the narrow file or symbol needed.
+
+## Windows Paths (Tool Args)
+
+- pi tools (`read`/`grep`/`edit`/`write`/`find`/`ls`, not `bash`) resolve paths via Node's win32 `path.resolve`: a leading `/` means the *current drive root*.
+- The Git Bash/MSYS prefix `/c/` is **not** understood by these tools — `/c/A-codes/...` becomes `C:\c\A-codes\...` (ENOENT).
+- Always pass pi tools cwd-relative paths (`components/AppShell.tsx`) or explicit `C:/A-codes/...`. Only `bash` commands may use `/c/...` (bash translates it).
 
 ## Project Shape
 
@@ -61,3 +68,7 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Match existing file style before editing.
 - Keep fixes narrow; do not rewrite architecture while solving a local UI or config issue.
 - If behavior changes, add or run the smallest relevant verification. For pure instruction/config edits, a text check is enough.
+
+## Coding-Cycle Skill Routing
+
+- When the user requests a code change and this turn is **not** already routed via `spec`/`run`/`discovery`, `read` the **explain-change** skill before editing — it must gate change work in this repo. Invoke it explicitly even if the user didn't mention it.

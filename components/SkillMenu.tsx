@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
+import React, { useEffect, useRef, useState, useLayoutEffect } from "react";
 
 export interface SkillItem {
   name: string;
@@ -17,6 +17,12 @@ interface Props {
   anchorRect: { top: number; left: number; width: number } | null;
 }
 
+// Reopening the /-menu remounts SkillMenu, so it refetches every time. Cache the
+// listing per-cwd briefly to make a quick reopen instant and avoid the ~1s server
+// skill-directory scan (see lib/skills-cache.ts).
+let skillsCache: { cwd: string; skills: SkillItem[]; ts: number } | null = null;
+const SKILLS_CACHE_TTL = 10_000;
+
 export function SkillMenu({ cwd, query, onSelect, onClose, anchorRect }: Props) {
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,8 +31,13 @@ export function SkillMenu({ cwd, query, onSelect, onClose, anchorRect }: Props) 
   const panelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Load skills once on mount
+  // Load skills once on mount (served from client/server cache on repeat opens)
   useEffect(() => {
+    if (skillsCache && skillsCache.cwd === cwd && Date.now() - skillsCache.ts < SKILLS_CACHE_TTL) {
+      setSkills(skillsCache.skills);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -39,6 +50,7 @@ export function SkillMenu({ cwd, query, onSelect, onClose, anchorRect }: Props) 
           return;
         }
         setSkills(d.skills ?? []);
+        skillsCache = { cwd, skills: d.skills ?? [], ts: Date.now() };
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -49,15 +61,17 @@ export function SkillMenu({ cwd, query, onSelect, onClose, anchorRect }: Props) 
     return () => { cancelled = true; };
   }, [cwd]);
 
-  // Filter by query
-  const filtered = skills.filter((s) => {
-    if (!query) return true;
-    const q = query.toLowerCase();
-    return (
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q)
-    );
-  });
+  // Filter by query, ranked by relevance.
+  const filtered = skills
+    .map((s) => ({ s, score: skillScore(s, query) }))
+    .filter((x) => x.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.s.name.length - b.s.name.length ||
+        a.s.name.localeCompare(b.s.name),
+    )
+    .map((x) => x.s);
 
   // Reset selection when filtered list changes
   useEffect(() => {
@@ -249,3 +263,32 @@ const headerStyle: React.CSSProperties = {
   textTransform: "uppercase" as const,
   letterSpacing: "0.06em",
 };
+
+// ── Relevance scoring for /-command skill search ──────────────────────────────
+// Priorities: exact name > name prefix > whole-token match > name endswith →
+// name substring → fuzzy subsequence on name → description match → desc-token match.
+function isSubsequence(q: string, s: string): boolean {
+  let i = 0;
+  for (let j = 0; j < s.length && i < q.length; j++) {
+    if (s[j] === q[i]) i++;
+  }
+  return i === q.length;
+}
+
+function skillScore(skill: SkillItem, rawQuery: string): number {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return 1; // no query: keep everything in insertion order
+  const name = skill.name.toLowerCase();
+  const desc = skill.description.toLowerCase();
+  const nameTokens = name.split(/[^a-z0-9]+/).filter(Boolean);
+
+  if (name === q) return 100;                  // exact name
+  if (name.startsWith(q)) return 80;           // name prefix
+  if (nameTokens.some((t) => t === q)) return 75; // whole token match
+  if (name.endsWith(q)) return 70;             // name suffix
+  if (name.includes(q)) return 60;             // name substring
+  if (isSubsequence(q, name)) return 40;       // fuzzy name
+  if (desc.includes(q)) return 30;             // description substring
+  if (desc.split(/[^a-z0-9]+/).filter(Boolean).some((t) => t.startsWith(q))) return 20; // desc token
+  return 0;
+}

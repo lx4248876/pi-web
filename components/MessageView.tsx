@@ -19,12 +19,19 @@ import type {
     UserMessage,
 } from "@/lib/types";
 
+interface ToolErrorContext {
+    sessionId?: string;
+    cwd?: string;
+}
+
 interface Props {
     message: AgentMessage;
     isStreaming?: boolean;
     toolResults?: Map<string, ToolResultMessage>;
     modelNames?: Record<string, string>;
     entryId?: string;
+    /** 会话标识与工作目录，用于「复制报错」按钮打包可排查信息 */
+    toolContext?: ToolErrorContext;
     onFork?: (entryId: string) => void;
     forking?: boolean;
     onNavigate?: (entryId: string) => void;
@@ -78,6 +85,12 @@ function arePropsEqual(prev: Props, next: Props) {
     if (prev.prevTimestamp !== next.prevTimestamp) return false;
     if (prev.entryId !== next.entryId) return false;
     if (prev.prevAssistantEntryId !== next.prevAssistantEntryId) return false;
+    if (
+        prev.toolContext?.sessionId !== next.toolContext?.sessionId ||
+        prev.toolContext?.cwd !== next.toolContext?.cwd
+    ) {
+        return false;
+    }
 
     if (prev.message !== next.message) {
         if (prev.message.role !== next.message.role) return false;
@@ -136,6 +149,7 @@ export const MessageView = memo(function MessageView({
                                                          onEditContent,
                                                          showTimestamp,
                                                          prevTimestamp,
+                                                         toolContext,
                                                      }: Props) {
     if (message.role === "user") {
         return (
@@ -159,6 +173,7 @@ export const MessageView = memo(function MessageView({
                 modelNames={modelNames}
                 showTimestamp={showTimestamp}
                 prevTimestamp={prevTimestamp}
+                toolContext={toolContext}
             />
         );
     }
@@ -500,6 +515,7 @@ function AssistantMessageView({
                                   modelNames,
                                   showTimestamp,
                                   prevTimestamp,
+                                  toolContext,
 }: {
     message: AssistantMessage;
     isStreaming?: boolean;
@@ -507,6 +523,7 @@ function AssistantMessageView({
     modelNames?: Record<string, string>;
     showTimestamp?: boolean;
     prevTimestamp?: number;
+    toolContext?: ToolErrorContext;
 }) {
     const time = showTimestamp ? formatTime(message.timestamp) : null;
     const blocks = message.content ?? [];
@@ -734,6 +751,7 @@ function AssistantMessageView({
                             (block.type === "thinking" ? thinkingDurationFromFile : undefined)
                         }
                         toolCallDurations={toolCallDurations}
+                        toolContext={toolContext}
                     />
                 ))}
             </div>
@@ -940,12 +958,14 @@ function BlockView({
                        isStreaming,
                        streamingDuration,
                        toolCallDurations,
+                       toolContext,
                    }: {
     block: AssistantContentBlock;
     toolResults?: Map<string, ToolResultMessage>;
     isStreaming?: boolean;
     streamingDuration?: number;
     toolCallDurations?: Map<string, number>;
+    toolContext?: ToolErrorContext;
 }) {
     if (block.type === "text") {
         return <TextBlock block={block as TextContent}/>;
@@ -968,6 +988,7 @@ function BlockView({
                 result={result}
                 isRunning={isStreaming && !result}
                 duration={duration}
+                toolContext={toolContext}
             />
         );
     }
@@ -1086,14 +1107,31 @@ function ToolCallBlock({
                            result,
                            isRunning,
                            duration,
+                           toolContext,
                        }: {
     block: ToolCallContent;
     result?: ToolResultMessage;
     isRunning?: boolean;
     duration?: number;
+    toolContext?: ToolErrorContext;
 }) {
     const [expanded, setExpanded] = useState(false);
+    const [copied, setCopied] = useState(false);
     const inputStr = JSON.stringify(block.input, null, 2);
+
+    const copyToolResult = () => {
+        const body = resultText?.trim() ?? "";
+        let payload =
+            `【${isError ? "工具调用报错" : "工具调用"}】${block.toolName}\n\n` +
+            `▍入参\n${inputStr}\n\n` +
+            `▍${isError ? "报错输出" : "输出"}\n${body}\n`;
+        if (toolContext?.cwd) payload += `\n工作目录: ${toolContext.cwd}\n`;
+        if (toolContext?.sessionId) payload += `会话: ${toolContext.sessionId}\n`;
+        copyText(payload).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        });
+    };
 
     // Result display
     const resultText = result
@@ -1173,6 +1211,28 @@ function ToolCallBlock({
                         }}
                     >
 						{duration}s
+					</span>
+                )}
+                {result && !isRunning && (
+                    <span
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            copyToolResult();
+                        }}
+                        title={isError ? "复制报错（含入参会话信息，便于其它会话排查）" : "复制此工具调用（含入参会话信息）"}
+                        style={{
+                            flexShrink: 0,
+                            fontSize: 10,
+                            fontWeight: 600,
+                            color: copied ? "#4ade80" : (isError ? "#fbbf24" : "#7dd3fc"),
+                            border: `1px solid ${copied ? "rgba(74,222,128,0.5)" : isError ? "rgba(251,191,36,0.5)" : "rgba(125,211,252,0.35)"}`,
+                            borderRadius: 4,
+                            padding: "1px 6px",
+                            cursor: "pointer",
+                            userSelect: "none",
+                        }}
+                    >
+						{copied ? "已复制" : isError ? "复制报错" : "复制"}
 					</span>
                 )}
                 <svg

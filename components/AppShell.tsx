@@ -24,6 +24,7 @@ export function AppShell() {
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
+  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [modelsConfigOpen, setModelsConfigOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
@@ -164,6 +165,16 @@ export function AppShell() {
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
   }, [router]);
 
+  const handleStreamingChange = useCallback((sessionId: string | null) => {
+    // Front-end knows which session is actually streaming; suppress its dot.
+    setRunningSessionId(sessionId);
+  }, []);
+
+  const handleAgentStart = useCallback(() => {
+    // Session began running: refresh the list so its terminal dot clears immediately.
+    setRefreshKey((k) => k + 1);
+  }, []);
+
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
@@ -221,6 +232,10 @@ export function AppShell() {
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
   }, [fileTabs]);
+
+  // Toggle the file-viewer panel from the top bar (replaces the old top-right
+  // floating button, which ended up hidden behind the modal backdrop).
+  const handleOpenFiles = useCallback(() => setRightPanelOpen((v) => !v), []);
 
   // Open the Git tab in the right panel (extracted from TopBar's git button)
   const handleOpenGit = useCallback(() => {
@@ -301,6 +316,7 @@ export function AppShell() {
         <SidebarPanel
           selectedSessionId={selectedSession?.id ?? null}
           onSelectSession={handleSelectSession}
+          runningSessionId={runningSessionId}
           onNewSession={handleNewSession}
           initialSessionId={initialSessionId}
           onInitialRestoreDone={handleInitialRestoreDone}
@@ -328,13 +344,15 @@ export function AppShell() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "transparent",
+            // Match the panel background so the 5px drag strip doesn't show a
+            // contrasting gap between the sidebar and the top bar.
+            background: "var(--bg-panel)",
             transition: sidebar.dragging ? "none" : "background 0.15s",
             position: "relative",
             zIndex: 201,
           }}
           onMouseEnter={(e) => { if (!sidebar.dragging) e.currentTarget.style.background = "var(--bg-hover)"; }}
-          onMouseLeave={(e) => { if (!sidebar.dragging) e.currentTarget.style.background = "transparent"; }}
+          onMouseLeave={(e) => { if (!sidebar.dragging) e.currentTarget.style.background = "var(--bg-panel)"; }}
         >
           <div style={{ width: 2, height: 24, borderRadius: 1, background: "var(--border)" }} />
         </div>
@@ -362,6 +380,8 @@ export function AppShell() {
           systemBtnRef={systemBtnRef}
           systemPrompt={systemPrompt}
           topPanelPos={topPanelPos}
+          filesOpen={rightPanelOpen}
+          onOpenFiles={handleOpenFiles}
         />
 
         {/* Chat content */}
@@ -371,7 +391,9 @@ export function AppShell() {
               key={sessionKey}
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}
+              onAgentStart={handleAgentStart}
               onAgentEnd={handleAgentEnd}
+              onStreamingChange={handleStreamingChange}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}
               modelsRefreshKey={modelsRefreshKey}
@@ -396,25 +418,6 @@ export function AppShell() {
         cwd={currentCwd ?? undefined}
       />
     </div>
-    {/* File panel toggle — always visible at top-right */}
-    <button
-      onClick={() => setRightPanelOpen((v) => !v)}
-      title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
-      style={{
-        position: "fixed", top: 0, right: 0, zIndex: 300,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        width: 36, height: 36, padding: 0,
-        background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
-        color: rightPanelOpen ? "var(--text)" : "var(--text-muted)",
-        cursor: "pointer", transition: "color 0.12s",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.color = rightPanelOpen ? "var(--text)" : "var(--text-muted)"; }}
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" />
-      </svg>
-    </button>
     {modelsConfigOpen && (
       <ModelsConfig
         onClose={() => {

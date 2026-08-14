@@ -88,6 +88,19 @@ export type ExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
+			method: "multiple";
+			title: string;
+			questions: Array<{
+				title?: string;
+				question: string;
+				placeholder?: string;
+				options?: string[];
+			}>;
+			timeout?: number;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
@@ -122,6 +135,7 @@ export type ExtensionUIRequest =
 
 export type ExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
+	| { type: "extension_ui_response"; id: string; value: string[] }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
@@ -129,13 +143,14 @@ function isDialogUiRequest(
 	event: ExtensionUIRequest,
 ): event is Extract<
 	ExtensionUIRequest,
-	{ method: "select" | "confirm" | "input" | "editor" }
+	{ method: "select" | "confirm" | "input" | "editor" | "multiple" }
 > {
 	return (
 		event.method === "select" ||
 		event.method === "confirm" ||
 		event.method === "input" ||
-		event.method === "editor"
+		event.method === "editor" ||
+		event.method === "multiple"
 	);
 }
 
@@ -147,6 +162,7 @@ export type AgentPhase =
 export interface UseAgentSessionOptions {
 	session: SessionInfo | null;
 	newSessionCwd: string | null;
+	onAgentStart?: () => void;
 	onAgentEnd?: () => void;
 	onSessionCreated?: (session: SessionInfo) => void;
 	onSessionForked?: (newSessionId: string) => void;
@@ -180,6 +196,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	const {
 		session,
 		newSessionCwd,
+		onAgentStart,
 		onAgentEnd,
 		onSessionCreated,
 		onSessionForked,
@@ -249,7 +266,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	} | null>(null);
 	const [pendingUiRequest, setPendingUiRequest] = useState<Extract<
 		ExtensionUIRequest,
-		{ method: "select" | "confirm" | "input" | "editor" }
+		{ method: "select" | "confirm" | "input" | "editor" | "multiple" }
 	> | null>(null);
 	const [uiNotice, setUiNotice] = useState<{
 		message: string;
@@ -462,6 +479,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 					setIsAborting(false);
 					setAgentPhase({ kind: "waiting_model" });
 					dispatch({ type: "start" });
+					onAgentStart?.();
 					break;
 				case "agent_end":
 					setAgentRunning(false);
@@ -663,7 +681,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				}
 			}
 		},
-		[loadSession, onAgentEnd],
+		[loadSession, onAgentEnd, onAgentStart],
 	);
 	handleAgentEventRef.current = handleAgentEvent;
 
