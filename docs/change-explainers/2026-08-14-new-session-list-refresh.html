@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>改动理解：新建会话后左侧列表立刻刷新</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:920px;margin:0 auto;padding:24px;color:#1f2328;line-height:1.6;background:#fff}
+  h1{font-size:22px;border-bottom:1px solid #e5e7eb;padding-bottom:10px}
+  .muted{color:#6b7280;font-size:13px}
+  .badge{display:inline-block;background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:600}
+  h2{font-size:17px;margin-top:26px;color:#111827}
+  code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .card{border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin:10px 0;font-size:14px}
+  .card.main{border-left:4px solid #2563eb;background:#fafbff}
+  .card.ripple{border-left:4px solid #9ca3af;background:#fafafa}
+  .card summary{cursor:pointer;font-weight:600}
+  .card p{margin:8px 0 0;color:#374151;font-size:13.5px}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13.5px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px}
+  .flow .step{background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:3px 9px;color:#3730a3;font-weight:600}
+  .flow .arrow{color:#9ca3af;font-weight:700}
+  ul{margin:6px 0}
+  li{margin:4px 0}
+  .risk{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 14px;margin:12px 0;font-size:13.5px}
+</style>
+</head>
+<body>
+  <h1>改动理解：新建会话发送后，左侧会话列表立刻刷新</h1>
+  <p class="muted"><span class="badge">Standard</span> 生成于 2026-08-14；基于仓库只读核实（commit 1689a44）。</p>
+
+  <div class="risk">本改动未命中高风险词（认证/支付/删数据等）。为纯前端新增一个「会话文件落盘时点」的回调刷新。</div>
+
+  <h2>一句话</h2>
+  <p>新建会话发第一条消息时，左侧列表要等 agent 跑完一轮才出现。它刷新的时机是「事件」不是“文件好了”那一刻，所以加一个在「新会话第一条助手回复落盘」时触发列表刷新的回调，让新会话立刻出现在左侧。</p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <code>hooks/useAgentSession.ts</code> · <code>UseAgentSessionOptions</code> + <code>handleAgentEvent</code>（message_start/message_update 分支）
+    <details><summary>怎么改 / 为什么</summary>
+      <p>新增一个可选回调 <code>onSessionContent</code>（或类似名）。在 <code>handleAgentEvent</code> 的 <code>message_start</code>/<code>message_update</code> 分支里，用 ref 按 <code>sessionIdRef.current</code> 去重，每个会话只在「第一条」助手消息时调一次这个回调。</p>
+      <p>为什么落这：pi 的新会话 .jsonl 文件是「第一条 assistant 消息出现时才写盘」，而 <code>message_start</code> 正是这条消息生成的时刻——此时文件已在磁盘上，此刻触发刷新列表才能扫到它。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>components/ChatWindow.tsx</code> · <code>Props</code> + 传给 <code>useAgentSession</code> 的解构
+    <details><summary>怎么改 / 为什么</summary>
+      <p>在 <code>Props</code> 增加 <code>onSessionContent?</code>，并像 <code>onAgentStart</code> 一样作为 prop 传进 <code>useAgentSession</code>，把最外层回调一路透传下去。</p>
+      <p>作用：把 AppShell 的刷新回调桥接到 hook 内部。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>components/AppShell.tsx</code> · <code>handleAgentStart</code> 旁的刷新回调 + 传给 <code>ChatWindow</code>
+    <details><summary>怎么改 / 为什么</summary>
+      <p>新增 <code>handleSessionContent</code>（内部就是 `setRefreshKey(k => k + 1)`，与 <code>handleAgentStart</code> 同款），并在渲染 <code>ChatWindow</code> 时传成 <code>onSessionContent</code>。</p>
+      <p>刷新 key 一变，侧栏 <code>useEffect</code> 就重新 fetch <code>/api/sessions</code>，这次能扫到已落盘的新会话。</p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <code>components/SessionSidebar.tsx</code> · <code>loadSessions</code>（只波及，不改）
+    <details><summary>为什么波及</summary><p>它已经是「refreshKey 变化就重拉列表」的入口，本次不新增逻辑；正好被 AppShell 新的 key 递增驱动，行为一致，无需改动。</p></details>
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="step">新会话发消息</span><span class="arrow">→</span>
+    <span class="step">pi 生成第一条助手消息并写盘</span><span class="arrow">→</span>
+    <span class="step">hook 的 message_start 判新会话</span><span class="arrow">→</span>
+    <span class="step">onSessionContent 回调</span><span class="arrow">→</span>
+    <span class="step">AppShell refreshKey+1</span><span class="arrow">→</span>
+    <span class="step">侧栏重新 fetch /api/sessions（这次能扫到文件）</span><span class="arrow">→</span>
+    <span class="step">新会话立即出现在左侧列表</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>新建会话发第一条消息后，稍等模型开始回复（第一条内容出现）时，左侧会话列表就已出现该会话，不用等整轮跑完。</li>
+    <li>已有会话的列表刷新行为、刷新按钮、terminal 圆点等不受影响。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不动服务端 <code>/api/sessions</code> 与 pi 的落盘策略（<code>SessionManager._persist</code>）——那是 pi 库行为，保持惰性写盘即可。</li>
+    <li>不给侧栏加轮询/定时器，保持当前「事件驱动」刷新设计。</li>
+    <li>不改会话排序、项目折叠、归档等无关逻辑。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li>假设：<code>message_start</code> 触发时，pi 已把新会话文件写盘（依据：<code>_persist</code> 在第一条 assistant 消息加入 fileEntries 时 <code>openSync(...,"wx")</code> 建文件）。若个别 Provider 流式时序提前发 <code>message_start</code> 尚未落盘，则用去重后对「第一条消息」多调几次（start/update）兜底，仍远早于 agent_end。</li>
+    <li>材料：够。三处符号已 Read/Grep 核实存在，链路完整。</li>
+  </ul>
+</body>
+</html>
