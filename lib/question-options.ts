@@ -1,4 +1,4 @@
-// Pure helpers for parsing AskUserQuestion / request_user_input parameters.
+// Pure helpers for parsing the `question` tool parameters.
 //
 // Kept as its own module (not inline in rpc-manager, which pulls in the pi SDK
 // and Next.js internals) so this normalization logic is unit-testable without
@@ -107,7 +107,7 @@ function resolveSingleQuestion(
 
 /**
  * Resolve the dialog request from a tool-call's raw params, tolerating both
- * AskUserQuestion's flat fields and a single Codex-style question (`questions[0]`).
+ * the `question` tool's flat fields and a single Codex-style question (`questions[0]`).
  *
  * Kept for backward compatibility / single-question callers.
  */
@@ -120,7 +120,7 @@ export function readQuestionRequest(
 /**
  * Resolve a possibly-multi-part question flow.
  *
- * AskUserQuestion / request_user_input accept either flat fields or a
+ * The `question` tool accepts either flat fields or a
  * Codex-style `questions: [{header,question,placeholder,options}, ...]` array.
  *
  * 适配性：当传入多个 Codex 问题对象时，逐条解析成独立的部分返回，交给调用方

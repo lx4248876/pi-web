@@ -38,7 +38,7 @@ test("extensionToolNamesOf filters out built-in + UI-compat tools, keeps extensi
     const registry = [
         tool("read"), tool("bash"), tool("edit"), tool("write"),
         tool("grep"), tool("find"), tool("ls"),
-        tool("AskUserQuestion"), tool("request_user_input"),
+        tool("question"),
         tool("subagent"), tool("TodoWrite"), tool("pi-lens"),
     ];
     const ext = extensionToolNamesOf(registry);
@@ -55,7 +55,7 @@ test("composeActiveTools merges requested built-ins with extension tools (non-of
     assert.ok(active.includes("read"), "built-in read must be present");
     assert.ok(active.includes("subagent"), "subagent must be auto-included");
     assert.ok(active.includes("pi-lens"), "pi-lens must be auto-included");
-    assert.ok(active.includes("AskUserQuestion"), "UI-compat tool must be added");
+    assert.ok(active.includes("question"), "UI-compat tool must be added");
 });
 
 test("composeActiveTools returns [] for the Off preset (everything truly off)", async () => {

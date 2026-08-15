@@ -231,22 +231,13 @@ function createCompatUiTools(): ToolDefinition[] {
 
 	return [
 		defineTool({
-			name: "AskUserQuestion",
+			name: "question",
 			label: "Ask user",
 			description:
-				"Ask the user a question through the host UI and return their answer.",
+				"Ask the user a question through the host UI and return their answer. " +
+				"Use this (and only this) tool whenever you need a missing decision or value.",
 			promptSnippet:
 				"Ask the user a question when you need a missing decision or value.",
-			parameters: uiQuestionParameters,
-			execute: executeQuestion,
-		}),
-		defineTool({
-			name: "request_user_input",
-			label: "Request user input",
-			description:
-				"Request short user input or a choice through the host UI. Accepts Codex-style questions/options.",
-			promptSnippet:
-				"Request user input with a dialog when interaction is needed.",
 			parameters: uiQuestionParameters,
 			execute: executeQuestion,
 		}),

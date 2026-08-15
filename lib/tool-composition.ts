@@ -3,7 +3,8 @@
 // pi-web lets the user pick a built-in tool *preset* (Off / Low / High), which
 // only describes the built-in coding tools (read/bash/edit/write/grep/find/ls).
 // But the session also has *extension* tools (subagent, pi-lens, ...) registered
-// by installed packages, plus two UI-compat tools pi-web injects itself.
+// by installed packages, plus one UI-compat ask-the-user tool pi-web injects
+// itself (a single tool named `question`).
 //
 // Those extension tools must stay available regardless of the preset — otherwise
 // features like subagent delegation silently stop working. The only case where
@@ -12,6 +13,15 @@
 //
 // Kept in its own module so it is unit-testable without loading the import-heavy
 // rpc-manager (which pulls in the pi SDK and Next.js internals).
+
+// The single ask-the-user tool pi-web exposes.
+//
+// pi-web needs to directly "ask the user" from inside a web session. The backend
+// running the model only exposes this under one name, `question`, and pi-web
+// injects exactly one working implementation for it (see createCompatUiTools in
+// rpc-manager.ts). Keep this list to exactly one entry: any extra alias would
+// show up as a duplicate "ask user" tool to the model.
+export const COMPAT_UI_TOOL_NAMES = ["question"] as const;
 
 // The seven built-in coding tools pi-web exposes via presets.
 export const CODING_TOOL_NAMES = [
@@ -23,10 +33,6 @@ export const CODING_TOOL_NAMES = [
     "find",
     "ls",
 ] as const;
-
-// UI-compat tools that pi-web injects via customTools (not part of the presets
-// but must ride along whenever any tool is active).
-export const COMPAT_UI_TOOL_NAMES = ["AskUserQuestion", "request_user_input"] as const;
 
 // Every tool name that is NOT user-toggled via a preset. Used to separate
 // "extension tool" (auto-included) from "built-in / UI-compat" (preset-driven).
