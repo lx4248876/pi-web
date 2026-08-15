@@ -193,7 +193,7 @@ const uiQuestionParameters = Type.Object({
 	),
 });
 
-function createCompatUiTools(): ToolDefinition[] {
+export function createCompatUiTools(): ToolDefinition[] {
 	const executeQuestion = async (
 		_toolCallId: string,
 		rawParams: Record<string, unknown>,
