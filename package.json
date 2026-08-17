@@ -30,6 +30,7 @@
     "@earendil-works/pi-ai": "^0.81.1",
     "@earendil-works/pi-coding-agent": "^0.81.1",
     "@lobehub/icons": "^5.6.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@oh-my-pi/hashline": "^15.5.10",
     "@types/react-syntax-highlighter": "^15.5.13",
     "next": "^16.2.7",

@@ -1,8 +1,8 @@
 # 项目骨架地图
 
 ## 元信息
-- base_ref: 8b52adc
-- 更新说明: 首建（基于 2026-08 bug 排查/修复/清理任务中对核心链路的定向阅读）。
+- base_ref: fb33f9c
+- 更新说明: 增量更新（基于 2026-08 会话列表 SSE 推送刷新 + API key 防脏值校验任务）。
 
 ## 目录职责
 | 路径 | 一句话职责 |
@@ -28,8 +28,8 @@
 | 链路名 | 从哪进 | 主要落点 | 一句话 |
 |--------|--------|----------|--------|
 | 会话执行 | `/api/agent/new`、`/api/agent/[id]` | `lib/rpc-manager.ts`（`startRpcSession`/`AgentSessionWrapper`）→ SSE `[id]/events` → `hooks/useAgentSession.ts` | 经 RPC 包装 pi AgentSession，SSE 推事件到前端 |
-| 会话浏览 | `/api/sessions/**` | `lib/session-reader.ts` | 只读 `.jsonl`，不 spawn 活跃 agent |
-| 模型/Auth | `/api/models`、`/api/auth/*`、`/api/test-connection` | pi-ai `ModelRuntime`（0.81.1） | 凭证/模型经 `ModelRuntime` 编排 |
+| 会话浏览 | `/api/sessions/**`、`/api/sessions/events`（SSE，新增） | `lib/session-reader.ts`、`lib/rpc-manager.ts`（`notifySessionListListeners`→`onRpcSessionEvent`） | 只读 `.jsonl` 不 spawn 活跃 agent；列表现由服务器 SSE 推送即时刷新（后台会话/报错停止也会推） |
+| 模型/Auth | `/api/models`、`/api/auth/*`、`/api/test-connection` | pi-ai `ModelRuntime`（0.81.1）、`lib/api-key-guard.ts`（新增） | 凭证/模型经 `ModelRuntime` 编排；api-key 保存先过 `validateApiKeyValue` 防脏值 |
 | 调试产物 | 任意调试输出 | `debug/` | 日志/截图/录制统一写 `debug/`（gitignore） |
 
 ## 与任务级产物的边界

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>改动理解：MCP 客户端桥接</title>
+<style>
+  :root { --fg:#e8e8e8; --muted:#9aa0a6; --bg:#141518; --card:#1c1e22; --line:#2a2d33; --main:#4aa3ff; --ripple:#d9a441; --risk:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--fg); font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; max-width:960px; margin:0 auto; padding:32px 24px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  h2 { font-size:17px; margin:32px 0 12px; padding-left:10px; border-left:3px solid var(--main); }
+  p { margin:8px 0; }
+  .muted { color:var(--muted); font-size:13px; }
+  .badge { display:inline-block; background:#3b1d1d; color:#ffb3b3; border:1px solid #7a3b3b; border-radius:99px; padding:1px 10px; font-size:12px; margin-right:8px; }
+  .riskbar { background:#2a1517; border:1px solid var(--risk); border-radius:8px; padding:10px 14px; margin:16px 0; font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:12px 0; }
+  .card.main { border-left:3px solid var(--main); }
+  .card.ripple { border-left:3px solid var(--ripple); }
+  code { background:#26282d; padding:1px 6px; border-radius:4px; font:13px Consolas,monospace; color:#7fc4ff; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; color:var(--muted); font-size:13px; user-select:none; }
+  details p { font-size:14px; color:#d5d8dc; margin:8px 0 4px; }
+  .flow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .step { background:#26282d; border:1px solid var(--line); border-radius:6px; padding:6px 12px; font-size:13px; }
+  .arrow { color:var(--muted); }
+  ul { padding-left:22px; }
+  li { margin:5px 0; }
+  .tag { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+  <h1>改动理解：MCP 客户端桥接（把 MCP 服务器工具接进 pi-web）</h1>
+  <p class="muted"><span class="badge">Deep</span> 生成于 2026-08-17；基于仓库只读核实（Grounding 来自 lib/rpc-manager.ts、lib/tool-composition.ts、@earendil-works/pi-coding-agent 0.81.1 类型声明）。</p>
+  <div class="riskbar">⛳ 风险提示：本项新增「对外工具注册」链路并新增一项运行时依赖（MCP SDK）。工具一旦注册给模型，模型可触发任意 MCP 服务器暴露的动作——这属于能力面外扩，需注意只加载用户配置里的服务器、且对服务器进程的生命周期做清理，避免向会话注入不受控工具。</div>
+
+  <h2>一句话</h2>
+  <p>让 pi 会话能加载用户在 <code>~/.pi/agent</code> 下配置的 MCP 服务器，把每个服务器暴露的 tool 映射成 pi 的工具（走 <code>defineTool</code> 的 <code>customTools</code> 通道），使模型能像 Codex 的 <code>mcp</code> 工具一样调用外部 MCP 生态。</p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <code>lib/mcp-client.ts（新增）</code> · <code>connectMcpServers / buildMcpToolDefinitions</code> — 新建一个纯 Node 侧 MCP 客户端封装，负责读取配置、启动 stdio/SSE 服务器、握手并列出工具。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>引入官方 <code>@modelcontextprotocol/sdk</code>（走 stdio transport 优先，这是 Codex 和绝大多数 MCP server 的主方式）；新增配置读取文件，格式是一个 JSON 列表（server 名 + command/args/env）。连接后调用 <code>listTools</code> 拿到每个 server 的工具清单。</p>
+      <p><b>为什么：</b>pi-web 及其底层 <code>pi-coding-agent</code> dist 里没有 MCP 客户端（核实确认为零），这是唯一从零补齐 Codex 该能力的通道。独立成 <code>lib/mcp-client.ts</code> 是为了不把生命周期管理和工具描述混进 <code>rpc-manager.ts</code> 的会话编排。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>lib/mcp-tools.ts（新增）</code> · <code>toPiTool / jsonSchemaToTypeBox</code> — 把 MCP 工具的 JSON Schema 转成 <code>defineTool</code> 需要的 TypeBox schema，并把 MCP 的 call 结果转成 pi 的 tool result。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>MCP 工具参数是 JSON Schema；pi 的 <code>defineTool.parameters</code> 收的是 TypeBox（见 <code>types.d.ts:335</code>），需要一层映射（存在 <code>@sinclair/typebox</code> Value/Type 构造或手工按类型递归）。调用时把模型给的参数透传给 MCP server 的 <code>callTool</code>，返回的 content 块（text/image/resource）归一成 pi 文本结果，多块拼接。</p>
+      <p><b>为什么：</b>两边的 schema 方言不一样，不翻译就无法注册；结果里可能混有图片等内容块，需要折叠成 pi 认得的文本/结构。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>lib/rpc-manager.ts</code> · <code>startRpcSession（:1229 处 createAgentSession 调用）</code> — 把 MCP 工具合并进 <code>customTools</code> 一起传给 <code>createAgentSession</code>。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>在 <code>startRpcSession</code> 里、调用 <code>createAgentSession</code> 之前，异步加载用户已启用的 MCP 服务器，把产出的工具定义和现有 <code>createCompatUiTools()</code> 结果拼在一起再传给 <code>customTools</code>。</p>
+      <p><b>为什么：</b>这里是全仓库「额外工具」的唯一注入点（当前只注入 <code>question</code>）。挂在这，MCP 工具就会和内置工具、扩展工具走完全相同的生命周期，也被 <code>composeActiveTools</code> 的「非内置工具自动保留」规则覆盖，用户不用在 preset 里手动勾选。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>app/api/mcp/route.ts（新增）</code> · <code>GET / POST</code> — 一个读/写 MCP 服务器配置的 HTTP 端点，落盘到 <code>~/.pi/agent/mcp.json</code>。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>GET 返回当前配置（脱敏 env）；POST 校验后用 <code>writeFileSync</code> 写 <code>getAgentDir()/mcp.json</code>（沿用 <code>lib/ui-state.ts</code> 的持久化先例）。配置改动不要求重启即可在下次新会话生效。</p>
+      <p><b>为什么：</b>pi-web 是 Web UI，配置不能只靠手编文件；且 <code>~/.pi/agent</code> 下已有 <code>settings.json</code>/<code>ui-state.json</code> 的同目录先例，放这里是本机级、跨浏览器源共享，符合仓库既有约定。</p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <code>components/ModelsConfig.tsx</code> 或新独立面板 <code>components/McpConfig.tsx</code> · 配置表单 — 让用户在 UI 里增删 MCP 服务器。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>给「服务器名 + command + args + env」做一个增删表单，调用上面新路由。为控制改动面，倾向新建 <code>McpConfig.tsx</code> 挂在现有设置区，而不是再拆 <code>ModelsConfig.tsx</code>。</p>
+      <p><b>为什么：</b>这是让功能「看得见、配得了」的最小 UI 面；不建则只能手编 JSON，不算完整补齐。</p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <code>components/MessageView.tsx</code> · toolCall/toolResult 渲染（:981、:1161 附近）— MCP 工具调用结果的可读展示。
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p><b>怎么改：</b>不强制改；MCP 工具调用本身会以标准 <code>toolCall</code>/<code>toolResult</code> 事件流入，现有渲染已能显示名称和文本。若某 MCP 返回长 JSON/多块，可后续再增强。</p>
+      <p><b>为什么：</b>先保证「能跑通」；展示增强属于体验项，放后续，避免这项第一版改动面失控。</p>
+    </details>
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="step">用户在设置里配 MCP 服务器</span><span class="arrow">→</span>
+    <span class="step"><code>app/api/mcp</code> 落盘 mcp.json</span><span class="arrow">→</span>
+    <span class="step"><code>startRpcSession</code> 读配置</span><span class="arrow">→</span>
+    <span class="step"><code>lib/mcp-client</code> 连接+listTools</span><span class="arrow">→</span>
+    <span class="step"><code>lib/mcp-tools</code> 转 defineTool</span><span class="arrow">→</span>
+    <span class="step"><code>customTools</code> 注入 createAgentSession</span><span class="arrow">→</span>
+    <span class="step">模型调用 → MCP callTool → 结果回显</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>配置一个真实 MCP server（例如一个 <code>playwright</code> 或 <code>filesystem</code> 服务）后，<code>getAllTools()</code> 里出现该 server 暴露的工具，模型在非 Off 工具预设下能调用它们。</li>
+    <li>调用一个 MCP 工具，回答里能看到它实际返回的结果（文本），不再只有内置 7 个工具。</li>
+    <li>填一个非法 command 或连接失败，会话能降级（跳过该 server 并给一条可见提示），而不是整场会话崩掉。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li><b>不要</b>重构 <code>rpc-manager.ts</code> 的会话编排或 <code>tool-composition.ts</code> 的 preset 逻辑——MCP 工具天然走「扩展工具」通道，现有逻辑已覆盖，无需改。</li>
+    <li><b>不要</b>顺手做「拆大文件」那项重构——那是清单最后一项，单独确认后再做。</li>
+    <li><b>不要</b>在<b>这版</b>就接 SSE/远程/无头浏览器 MCP server 的全矩阵；第一版只保证 stdio 主通道，其余留作扩展。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li><b>未知：</b>MCP 部分工具参数 schema 用到了 JSON Schema 里 TypeBox 没有 1:1 对应的关键字（如 <code>anyOf</code>/<code>oneOf</code>/复杂 <code>$defs</code>），映射的完整覆盖度待实现时逐个验证。</li>
+    <li><b>未知：</b><code>listTools</code> 返回的工具描述可能与 pi 的 <code>description</code>/<code>promptSnippet</code> 字段语义不完全一致，需要看实际 SDK 返回再对齐。</li>
+    <li><b>假设：</b>官方 <code>@modelcontextprotocol/sdk</code> 可在当前 Node 版本下正常安装使用，且与 Next.js 服务端（Route Handler）同进程运行无冲突。</li>
+    <li><b>假设：</b>MCP 服务器进程由 pi-web 侧 spawn 并随会话生命周期管理是可行的（后续会话热加载、换 cwd 等边界需在实现阶段确认）。</li>
+    <li><b>材料：够</b>——主链路（工具注入点、defineTool 签名、配置目录、前端展示）均已核实到文件与符号。</li>
+  </ul>
+</body>
+</html>
