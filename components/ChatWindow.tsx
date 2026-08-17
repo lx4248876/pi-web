@@ -128,11 +128,14 @@ function ExtensionUIDialog({
     // 多问题：每个问题各自的选中项（有 options 的）与文本输入（无 options 的）
     const [selections, setSelections] = useState<Record<number, string>>({});
     const [inputs, setInputs] = useState<Record<number, string>>({});
+    // 单问题（select）：除了点选项，还允许手输自定义答案兜底
+    const [custom, setCustom] = useState("");
 
     useEffect(() => {
         setValue(request.method === "editor" ? (request.prefill ?? "") : "");
         setSelections({});
         setInputs({});
+        setCustom("");
     }, [
         request.id,
         request.method,
@@ -148,22 +151,32 @@ function ExtensionUIDialog({
     const submitValue = () =>
         onResponse({type: "extension_ui_response", id: request.id, value});
 
-    // 多问题：校验每问都已作答，按序收集答案数组回传
+    // 单问题（select）：自定义输入非空时提交自定义答案
+    const submitCustom = () => {
+        const text = custom.trim();
+        if (!text) return;
+        onResponse({ type: "extension_ui_response", id: request.id, value: text });
+    };
+
+    // 多问题：校验每问都已作答（选项选中 或 自定义输入），按序收集答案数组回传
     const multipleAnswered = useMemo(() => {
         if (request.method !== "multiple") return true;
         return request.questions.every((q, qi) =>
             q.options && q.options.length > 0
-                ? Boolean(selections[qi])
+                ? Boolean(selections[qi]) || Boolean((inputs[qi] ?? "").trim())
                 : Boolean((inputs[qi] ?? "").trim()),
         );
     }, [request, selections, inputs]);
     const submitMultiple = () => {
         if (request.method !== "multiple") return;
-        const answers = request.questions.map((q, qi) =>
-            q.options && q.options.length > 0
-                ? selections[qi] ?? ""
-                : (inputs[qi] ?? "").trim(),
-        );
+        // 自定义文本优先；没有输入才用选中项
+        const answers = request.questions.map((q, qi) => {
+            const customText = (inputs[qi] ?? "").trim();
+            if (q.options && q.options.length > 0) {
+                return customText || (selections[qi] ?? "");
+            }
+            return customText;
+        });
         onResponse({
             type: "extension_ui_response",
             id: request.id,
@@ -239,6 +252,23 @@ function ExtensionUIDialog({
                                 {option}
                             </button>
                         ))}
+                        <input
+                            value={custom}
+                            placeholder="或输入自定义答案…"
+                            onChange={(e) => setCustom(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") submitCustom();
+                                if (e.key === "Escape") cancel();
+                            }}
+                            className="w-full text-sm outline-none"
+                            style={{
+                                background: "var(--bg)",
+                                border: "1px solid var(--border)",
+                                borderRadius: 6,
+                                color: "var(--text)",
+                                padding: "9px 10px",
+                            }}
+                        />
                     </div>
                 )}
 
@@ -282,27 +312,30 @@ function ExtensionUIDialog({
                                             );
                                         })}
                                     </div>
-                                ) : (
-                                    <input
-                                        value={inputs[qi] ?? ""}
-                                        placeholder={q.placeholder}
-                                        onChange={(e) =>
-                                            setInputs((s) => ({ ...s, [qi]: e.target.value }))
-                                        }
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter") submitMultiple();
-                                            if (e.key === "Escape") cancel();
-                                        }}
-                                        className="w-full text-sm outline-none"
-                                        style={{
-                                            background: "var(--bg)",
-                                            border: "1px solid var(--border)",
-                                            borderRadius: 6,
-                                            color: "var(--text)",
-                                            padding: "9px 10px",
-                                        }}
-                                    />
-                                )}
+                                ) : null}
+                                <input
+                                    value={inputs[qi] ?? ""}
+                                    placeholder={
+                                        q.options && q.options.length > 0
+                                            ? "或输入自定义答案…"
+                                            : (q.placeholder ?? "输入答案…")
+                                    }
+                                    onChange={(e) =>
+                                        setInputs((s) => ({ ...s, [qi]: e.target.value }))
+                                    }
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") submitMultiple();
+                                        if (e.key === "Escape") cancel();
+                                    }}
+                                    className="w-full text-sm outline-none"
+                                    style={{
+                                        background: "var(--bg)",
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 6,
+                                        color: "var(--text)",
+                                        padding: "9px 10px",
+                                    }}
+                                />
                             </div>
                         ))}
                     </div>
@@ -431,7 +464,23 @@ function ExtensionUIDialog({
                         >
                             {multipleAnswered ? "提交" : "请完成所有问题"}
                         </button>
-                    ) : request.method !== "select" ? (
+                    ) : request.method === "select" ? (
+                        custom.trim() ? (
+                            <button
+                                onClick={submitCustom}
+                                className="text-sm"
+                                style={{
+                                    border: "1px solid var(--accent)",
+                                    borderRadius: 6,
+                                    background: "var(--accent)",
+                                    color: "white",
+                                    padding: "7px 12px",
+                                }}
+                            >
+                                提交自定义答案
+                            </button>
+                        ) : null
+                    ) : (
                         <button
                             onClick={submitValue}
                             className="text-sm"
@@ -445,7 +494,7 @@ function ExtensionUIDialog({
                         >
                             Submit
                         </button>
-                    ) : null}
+                    )}
                 </div>
             </div>
         </div>
