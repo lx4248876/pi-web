@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { pickTestModelId } from "@/lib/models-config-test-connection";
+import { validateApiKeyValue } from "@/lib/api-key-guard";
 // Color icons (have their own fill colors — no background needed)
 import AnthropicIcon from "@lobehub/icons/es/Anthropic/components/Mono";
 import OpenAIIcon from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -912,16 +913,29 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  // 替换已有 key 的二次确认：默认 false，点 Save 时若已配置则先进入确认态，须再点“确认替换”。
+  const [confirmReplace, setConfirmReplace] = useState(false);
+
+  // 内联防呆：非空输入时校验“看起来是否像 API key”，拦截中文/多段文本等脏值直接保存。
+  const keyCheck = apiKey.trim() ? validateApiKeyValue(apiKey) : null;
+  const keyInvalid =
+    keyCheck !== null && !keyCheck.ok && keyCheck.code !== "EMPTY";
+  const canSave = !!apiKey.trim() && !keyInvalid;
 
   // Reset state when provider changes
   useEffect(() => {
     setApiKey("");
     setError(null);
     setSavedOk(false);
+    setConfirmReplace(false);
   }, [provider.id]);
 
-  const handleSave = useCallback(async () => {
-    if (!apiKey.trim()) return;
+  // 输入变化后复位二次确认，避免旧确认态残留。
+  useEffect(() => {
+    setConfirmReplace(false);
+  }, [apiKey]);
+
+  const doSave = useCallback(async (apiKeyValue: string) => {
     setSaving(true);
     setError(null);
     setSavedOk(false);
@@ -929,23 +943,35 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
       const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
+        body: JSON.stringify({ apiKey: apiKeyValue.trim() }),
       });
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) {
         setError(d.error ?? `HTTP ${res.status}`);
-      } else {
-        setApiKey("");
-        setSavedOk(true);
-        setTimeout(() => setSavedOk(false), 2000);
-        onRefresh();
+        return;
       }
+      setApiKey("");
+      setSavedOk(true);
+      setTimeout(() => setSavedOk(false), 2000);
+      onRefresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
+      setConfirmReplace(false);
     }
-  }, [apiKey, provider.id, onRefresh]);
+  }, [provider.id, onRefresh]);
+
+  const handleSave = useCallback(async () => {
+    const v = apiKey.trim();
+    if (!v || !canSave) return;
+    // 已配置过 key 时，替换前必须显式二次确认，防止输入框里的脏值静默覆盖正确 key。
+    if (provider.configured && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
+    }
+    await doSave(v);
+  }, [apiKey, canSave, confirmReplace, provider.configured, doSave]);
 
   const handleRemove = useCallback(async () => {
     setRemoving(true);
@@ -985,7 +1011,7 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
           <SecretTextInput
             value={apiKey}
             onChange={setApiKey}
-            onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSave) handleSave(); }}
             placeholder={provider.configured ? "Enter new key to replace…" : "sk-…"}
             style={{ flex: 1 }}
             autoComplete="off"
@@ -994,13 +1020,13 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
           />
           <button
             onClick={handleSave}
-            disabled={saving || !apiKey.trim() || savedOk}
+            disabled={saving || !canSave || savedOk}
             style={{
               padding: "6px 12px",
-              background: savedOk ? "#16a34a" : apiKey.trim() ? "var(--accent)" : "var(--bg-panel)",
+              background: savedOk ? "#16a34a" : canSave ? "var(--accent)" : "var(--bg-panel)",
               border: "none", borderRadius: 5,
-              color: (apiKey.trim() || savedOk) ? "#fff" : "var(--text-dim)",
-              cursor: (saving || !apiKey.trim() || savedOk) ? "not-allowed" : "pointer",
+              color: (canSave || savedOk) ? "#fff" : "var(--text-dim)",
+              cursor: (saving || !canSave || savedOk) ? "not-allowed" : "pointer",
               fontSize: 12, fontWeight: 600, flexShrink: 0,
               display: "flex", alignItems: "center", gap: 5,
             }}
@@ -1014,6 +1040,34 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
           </button>
         </div>
       </Field>
+
+      {keyInvalid && keyCheck && !keyCheck.ok && (
+        <p style={{ margin: 0, fontSize: 12, color: "#fbbf24", lineHeight: 1.5 }}>
+          ⚠️ {keyCheck.message}
+        </p>
+      )}
+
+      {confirmReplace && provider.configured && canSave && !savedOk && (
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "8px 10px", borderRadius: 5,
+            border: "1px solid rgba(251,191,36,0.5)", background: "rgba(251,191,36,0.08)",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "#fbbf24", flex: 1 }}>
+            要把当前已存的 API Key 替换成上面这串吗？
+          </span>
+          <button
+            onClick={() => setConfirmReplace(false)}
+            style={{ padding: "4px 10px", background: "none", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-dim)", cursor: "pointer", fontSize: 12 }}
+          >Cancel</button>
+          <button
+            onClick={handleSave}
+            style={{ padding: "4px 10px", background: "#d97706", border: "none", borderRadius: 4, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+          >确认替换</button>
+        </div>
+      )}
 
       {error && <p style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{error}</p>}
 

@@ -1,5 +1,6 @@
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { NextResponse } from "next/server";
+import { validateApiKeyValue } from "@/lib/api-key-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,12 @@ export async function POST(req: Request, { params }: Params) {
     const { apiKey } = await req.json() as { apiKey?: string };
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
+    }
+    // 防呆：不做非空校验，避免中文/多段文本等明显非 key 的脏值被静默存进凭据存储。
+    // 这也是本次智谱 key 被一句中文覆盖导致 401 的根因，这里作为强制兜底。
+    const check = validateApiKeyValue(apiKey);
+    if (!check.ok) {
+      return NextResponse.json({ error: check.message, code: check.code }, { status: 400 });
     }
     // 0.81.1：持久化凭证改走 runtime.login；内置 apiKey 流程只会 prompt 一次索要 key
     const runtime = await ModelRuntime.create();
