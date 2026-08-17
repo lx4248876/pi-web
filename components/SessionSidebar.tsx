@@ -345,6 +345,9 @@ export function SessionSidebar({
 	const [confirmHideCwd, setConfirmHideCwd] = useState<string | null>(null);
 
 	// Hidden project paths state helper
+	// 隐藏项目列表持久化在服务端（/api/ui-state，落盘在 pi agent 目录）：
+	// localStorage 按 localhost/127.0.0.1 等源隔离，换地址打开就会"复活"已隐藏
+	// 项目；服务端一份对本机全局生效。localStorage 只作首屏兜底，加载后以服务端为准。
 	const [hiddenCwds, setHiddenCwds] = useState<Record<string, boolean>>(() => {
 		if (typeof window !== "undefined") {
 			try {
@@ -354,6 +357,53 @@ export function SessionSidebar({
 		}
 		return {};
 	});
+
+	// 服务端版本就位后覆盖本地兜底值，并把本地独有的记录合并上去
+	useEffect(() => {
+		let cancelled = false;
+		fetch("/api/ui-state")
+			.then((r) => (r.ok ? r.json() : null))
+			.then((state: { hiddenCwds?: Record<string, boolean> } | null) => {
+				if (cancelled || !state?.hiddenCwds) return;
+				const serverHidden = state.hiddenCwds;
+				setHiddenCwds((local) => {
+					const merged = { ...serverHidden };
+					let changed = false;
+					for (const [cwd, hidden] of Object.entries(local)) {
+						if (hidden && !merged[cwd]) {
+							merged[cwd] = true;
+							changed = true;
+						}
+					}
+					if (changed) {
+						fetch("/api/ui-state", {
+							method: "PUT",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ hiddenCwds: merged }),
+						}).catch(() => {});
+					}
+					try {
+						localStorage.setItem("pi-hidden-cwds", JSON.stringify(merged));
+					} catch {}
+					return merged;
+				});
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const persistHiddenCwds = useCallback((next: Record<string, boolean>) => {
+		try {
+			localStorage.setItem("pi-hidden-cwds", JSON.stringify(next));
+		} catch {}
+		fetch("/api/ui-state", {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ hiddenCwds: next }),
+		}).catch(() => {});
+	}, []);
 
 	// 归档面板(聚焦弹出,展示所有被关闭项目下的归档会话)开关
 	const [archivedOpen, setArchivedOpen] = useState(false);
@@ -396,9 +446,7 @@ export function SessionSidebar({
 		(cwd: string) => {
 			setHiddenCwds((prev) => {
 				const next = { ...prev, [cwd]: true };
-				try {
-					localStorage.setItem("pi-hidden-cwds", JSON.stringify(next));
-				} catch {}
+				persistHiddenCwds(next);
 				return next;
 			});
 
@@ -418,7 +466,7 @@ export function SessionSidebar({
 				}
 			}
 		},
-		[selectedCwd, allSessions, storedRecentCwds],
+		[selectedCwd, allSessions, storedRecentCwds, persistHiddenCwds],
 	);
 
 	const rememberCwd = useCallback((cwd: string) => {
@@ -429,9 +477,7 @@ export function SessionSidebar({
 			if (!prev[trimmed]) return prev;
 			const next = { ...prev };
 			delete next[trimmed];
-			try {
-				localStorage.setItem("pi-hidden-cwds", JSON.stringify(next));
-			} catch {}
+			persistHiddenCwds(next);
 			return next;
 		});
 
@@ -443,7 +489,7 @@ export function SessionSidebar({
 			persistStoredRecentCwds(next);
 			return next;
 		});
-	}, []);
+	}, [persistHiddenCwds]);
 
 	const forgetStoredCwd = useCallback(
 		(cwd: string) => {
@@ -459,9 +505,7 @@ export function SessionSidebar({
 				if (!prev[cwd]) return prev;
 				const next = { ...prev };
 				delete next[cwd];
-				try {
-					localStorage.setItem("pi-hidden-cwds", JSON.stringify(next));
-				} catch {}
+				persistHiddenCwds(next);
 				return next;
 			});
 
@@ -480,7 +524,7 @@ export function SessionSidebar({
 				}
 			}
 		},
-		[selectedCwd, allSessions, storedRecentCwds],
+		[selectedCwd, allSessions, storedRecentCwds, persistHiddenCwds],
 	);
 
 	const loadBrowseEntries = useCallback(async (path?: string | null) => {
@@ -565,47 +609,64 @@ export function SessionSidebar({
 		};
 	}, []);
 
-	const loadSessions = useCallback(async (showLoading = false) => {
-		try {
-			if (showLoading) setLoading(true);
-			const res = await fetch("/api/sessions");
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			const data = (await res.json()) as { sessions: SessionInfo[] };
-			setAllSessions(data.sessions);
-			// First-ever load: treat all pre-existing sessions as already-viewed so
-			// historical completions don't all light up at once — dots only reflect
-			// NEW completions from now on.
-			if (!seenSeededRef.current) {
-				seenSeededRef.current = true;
-				try {
-					if (!window.localStorage.getItem("pi-session-seen-init")) {
-						const seed: Record<string, string> = {};
-						for (const s of data.sessions) seed[s.id] = s.modified;
-						setSeenAt(seed);
-						persistSeenAt(seed);
-						window.localStorage.setItem("pi-session-seen-init", "1");
-					}
-				} catch {}
+	const loadSessions = useCallback(
+		async (showLoading = false, opts?: { silent?: boolean }) => {
+			try {
+				if (showLoading) setLoading(true);
+				const res = await fetch("/api/sessions");
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = (await res.json()) as { sessions: SessionInfo[] };
+				setAllSessions(data.sessions);
+				// First load of each page view: treat every currently-listed session as
+				// already-viewed (seenAt = max(existing, modified)) so dots only reflect
+				// completions that happen AFTER this page was opened — restarts never
+				// light up the whole history.
+				if (!seenSeededRef.current) {
+					seenSeededRef.current = true;
+					setSeenAt((prev) => {
+						let changed = false;
+						const next = { ...prev };
+						for (const s of data.sessions) {
+							if ((next[s.id] ?? "") < s.modified) {
+								next[s.id] = s.modified;
+								changed = true;
+							}
+						}
+						if (changed) persistSeenAt(next);
+						return changed ? next : prev;
+					});
+				}
+				setError(null);
+				// Silent refreshes (SSE push) skip the refresh-check flash.
+				if (!showLoading && !opts?.silent) {
+					setSessionRefreshDone(true);
+					if (sessionRefreshTimerRef.current)
+						clearTimeout(sessionRefreshTimerRef.current);
+					sessionRefreshTimerRef.current = setTimeout(
+						() => setSessionRefreshDone(false),
+						2000,
+					);
+				}
+			} catch (e) {
+				setError(String(e));
+			} finally {
+				if (showLoading) setLoading(false);
 			}
-			setError(null);
-			if (!showLoading) {
-				setSessionRefreshDone(true);
-				if (sessionRefreshTimerRef.current)
-					clearTimeout(sessionRefreshTimerRef.current);
-				sessionRefreshTimerRef.current = setTimeout(
-					() => setSessionRefreshDone(false),
-					2000,
-				);
-			}
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			if (showLoading) setLoading(false);
-		}
-	}, []);
+		},
+		[persistSeenAt],
+	);
 
-	// Session dots update through explicit events (agent start/end and session
-	// select), not background polling.
+	// Session dots update via SSE push from the server (agent start/end across ALL
+	// sessions, including background ones), plus explicit events (session select).
+	useEffect(() => {
+		const es = new EventSource("/api/sessions/events");
+		es.onmessage = (e) => {
+			if (e.data?.includes("session_activity")) {
+				loadSessions(false, { silent: true });
+			}
+		};
+		return () => es.close();
+	}, [loadSessions]);
 
 	const initialLoadDone = useRef(false);
 	useEffect(() => {

@@ -20,6 +20,21 @@ const STATUS_TAIL_BYTES = 128 * 1024;
 
 type SessionStatus = "completed" | "failed" | null;
 
+// ─── 状态推导缓存 ────────────────────────────────────────────────────────────
+// /api/sessions 每次刷新都会对每个会话文件做尾部读取+解析；会话多时是列表
+// 「慢半拍」的主因。文件没变（mtime+size 相同）时直接复用上次推导结果。
+// 注册表挂 globalThis 以免 dev-server 热重载后缓存失效。
+const statusCacheG = globalThis as typeof globalThis & {
+  __piSessionStatusCache?: Map<string, { mtimeMs: number; size: number; status: SessionStatus }>;
+};
+
+function getStatusCache() {
+  if (!statusCacheG.__piSessionStatusCache) {
+    statusCacheG.__piSessionStatusCache = new Map();
+  }
+  return statusCacheG.__piSessionStatusCache;
+}
+
 function readFileTail(filePath: string): string | null {
   try {
     const { size } = statSync(filePath);
@@ -76,6 +91,33 @@ function deriveStatusFromMessage(msg: ClientMessageLike | undefined | null): Ses
 }
 
 export function readSessionStatus(filePath: string): SessionStatus {
+  let st: { mtimeMs: number; size: number };
+  try {
+    const s = statSync(filePath);
+    st = { mtimeMs: s.mtimeMs, size: s.size };
+  } catch {
+    return null;
+  }
+
+  const cache = getStatusCache();
+  const hit = cache.get(filePath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+    return hit.status;
+  }
+
+  const status = readSessionStatusFromTail(filePath);
+  cache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, status });
+  // 粗防泄漏：缓存条目超过会话文件数量一个量级时清理失效路径
+  if (cache.size > 2000) {
+    for (const key of cache.keys()) {
+      cache.delete(key);
+      if (cache.size <= 1000) break;
+    }
+  }
+  return status;
+}
+
+function readSessionStatusFromTail(filePath: string): SessionStatus {
   const tail = readFileTail(filePath);
   if (tail === null) return null;
 

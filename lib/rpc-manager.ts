@@ -267,6 +267,7 @@ export class AgentSessionWrapper {
 	private onDestroyCallback: (() => void) | null = null;
 	private pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	private _alive = true;
+	private lastNotifiedStreaming = false;
 
 	// Loop detection state
 	private loopDetection = {
@@ -332,7 +333,28 @@ export class AgentSessionWrapper {
 		this.resetIdleTimer();
 	}
 
+	/**
+	 * 会话状态点推送的节流阀：只把「开始跑/仍在跑/跑完了」这些列表级变化
+	 * 转发给 onRpcSessionEvent 订阅者，纯文本增量等高频事件不转发。
+	 * streaming 边沿（false→true / true→false）各转发一次，运行中的
+	 * message/tool 事件至多每 3s 再转发一次，作为心跳兜底。
+	 */
+	private notifySessionListListeners(): void {
+		const streaming = this.inner.isStreaming;
+		const edge = streaming !== this.lastNotifiedStreaming;
+		if (!edge && !streaming) return;
+		const now = Date.now();
+		if (!edge && now - this.lastSessionNotifyAt < 3000) return;
+		if (edge) this.lastNotifiedStreaming = streaming;
+		this.lastSessionNotifyAt = now;
+		notifyRpcSessionEventListeners(this.sessionId);
+	}
+
+	private lastSessionNotifyAt = 0;
+
 	emit(event: AgentEvent): void {
+		void event; // 事件本体不用于列表通知；见 notifySessionListListeners 的节流逻辑
+		this.notifySessionListListeners();
 		const hadListeners = this.listeners.length > 0;
 		for (const l of this.listeners) l(event);
 		// 当没有在线监听器时（例如前端正在重连或新会话刚启动尚未建立 SSE），
@@ -1094,6 +1116,41 @@ export function getActiveRpcSessionIds(): Set<string> {
     if (wrapper.inner.isStreaming) ids.add(id);
   }
   return ids;
+}
+
+// ─── 会话列表变更订阅（供 /api/sessions/events SSE 推送） ─────────────────────
+// 活跃会话有「开始跑/跑完」级别的状态变化时通知订阅者；SSE 路由据此推动前端
+// 刷新会话列表，替代轮询。注册表挂 globalThis 以免 dev-server 热重载后丢失。
+
+type RpcSessionEventListener = (sessionId: string) => void;
+
+interface RpcSessionEventRegistry {
+  listeners: Set<RpcSessionEventListener>;
+}
+
+const g = globalThis as typeof globalThis & { __piSessionEventListeners?: RpcSessionEventRegistry };
+
+function getSessionEventRegistry(): RpcSessionEventRegistry {
+  if (!g.__piSessionEventListeners) {
+    g.__piSessionEventListeners = { listeners: new Set() };
+  }
+  return g.__piSessionEventListeners;
+}
+
+function notifyRpcSessionEventListeners(sessionId: string): void {
+  for (const l of getSessionEventRegistry().listeners) {
+    try {
+      l(sessionId);
+    } catch {
+      // 一个订阅者出错不影响其余订阅者
+    }
+  }
+}
+
+export function onRpcSessionEvent(listener: RpcSessionEventListener): () => void {
+  const reg = getSessionEventRegistry();
+  reg.listeners.add(listener);
+  return () => reg.listeners.delete(listener);
 }
 
 /**
