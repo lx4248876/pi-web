@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>改动理解：恢复并补全提示音（任务完成 + 需要提问）</title>
+  <style>
+    body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1115; color: #d6dae0; max-width: 860px; margin: 32px auto; padding: 0 20px; line-height: 1.7; }
+    h1 { font-size: 22px; color: #eef1f5; border-bottom: 1px solid #2a2e36; padding-bottom: 10px; }
+    h2 { font-size: 17px; color: #9fb4ff; margin-top: 30px; }
+    .muted { color: #8a919c; font-size: 13px; }
+    .badge { display: inline-block; background: #3a3f4b; color: #cdd5e6; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+    .card { border: 1px solid #2a2e36; border-radius: 8px; padding: 12px 16px; margin: 10px 0; background: #15181e; }
+    .card.main { border-left: 3px solid #4f83ff; }
+    .card.ripple { border-left: 3px solid #6b7280; }
+    code { background: #20242c; border-radius: 4px; padding: 1px 6px; font-size: 13px; color: #ffd9a0; }
+    .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; background: #15181e; border: 1px solid #2a2e36; border-radius: 8px; color: #b9c0cb; }
+    .flow span.dot { background: #3a3f4b; border-radius: 4px; padding: 2px 8px; font-size: 13px; }
+    .flow span.arrow { color: #5a6resolution-affordance; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; color: #9fb4ff; font-size: 13px; }
+    details p { margin: 8px 0 4px; font-size: 14px; }
+    ul { padding-left: 20px; }
+    li { margin: 4px 0; }
+    .warn { border: 1px solid #b45309; background: #2b2113; color: #ffd9a0; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>改动理解：恢复并补全提示音（任务完成 + 需要提问）</h1>
+  <p class="muted"><span class="badge">Standard</span> 生成于 2026-08-18；基于仓库只读核实。</p>
+
+  <h2>一句话</h2>
+  <p>把“任务完成后提示音”从当前坏实现（靠临时改 <code>handleAgentEventRef</code>，会被 useAgentSession 每次渲染冲掉）换成可靠接线（直接包 <code>onAgentEnd</code> 回调），修复 <code>useAudio</code> 的 AudioContext 自动播放策略问题；再补上“需要提问（弹窗请求）”时的独立提示音。</p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <code>components/ChatWindow.tsx</code> · <code>onAgentEnd</code> 传入处 / 声音监听 — 白话职责：任务结束、提问弹窗出现时触发发声
+    <details><summary>怎么改 / 为什么</summary>
+      <p><b>任务完成音</b>：删除现在用 <code>useEffect</code> 改写 <code>handleAgentEventRef.current</code> 的那段（ChatWindow.tsx:645-654）。改在 <code>useAgentSession({ ... })</code> 调用处，先包一层 <code>onAgentEnd</code>：包里的回调先判断声音开关、播放完成音，再调用原来的 <code>onAgentEnd</code>。因为 useAgentSession 在 <code>agent_end</code> 时是统一调用这个回调（useAgentSession.ts:608），且不依赖那个会被每次渲染覆盖的 ref，所以声音一定能触发。</p>
+      <p><b>提问音</b>：新增一个 <code>useEffect</code> 监听 <code>pendingUiRequest</code>，当它从空变成非空（也就是 agent 抛出一个 question/confirm/input/multiple 弹窗）时，播放一个和完成音不同的提示音。这样不需要改动 useAgentSession 的业务逻辑。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <code>hooks/useAudio.ts</code> · <code>playDone</code> / 新增 <code>playAsk</code> — 白话职责：声音开关 + 实际播放
+    <details><summary>怎么改 / 为什么</summary>
+      <p>复用同一个 AudioContext 实例，每次播放前若处于 <code>suspended</code>（浏览器自动播放策略常见的状态）就 <code>resume()</code>，不再每次 <code>new AudioContext()</code> 后立刻 <code>close()</code>。否则在无障碍点击的刷新/后台场景里，新上下文被挂起，发不出声音——这是“任务完成音”个因性失效的第二个源头。</p>
+      <p>新增一个 <code>playAsk</code> 提示音（音色/音高与完成音区分，例如三连短音），同样遵守声音开关并复用同一 AudioContext，暴露给 ChatWindow 使用。</p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <code>components/ChatWindow.tsx</code> · <code>useAudio()</code> 解构处 — 白话责任：把新加的 <code>playAsk</code> 解构出来并接进 <code>pendingUiRequest</code> 监听；<code>handleAgentEventRef</code> 的包装代码删除后该 ref 不再被外部改写。
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="dot">用户发起/继续任务</span> →
+    <span class="dot">SSE: <code>agent_end</code></span> →
+    <span class="dot">useAgentSession 调 <code>onAgentEnd()</code></span> →
+    <span class="dot">包好的回调：<code>playDoneSound()</code>（若开启）</span> →
+    <span class="dot">用户听到完成音</span>
+  </div>
+  <div class="flow">
+    <span class="dot">agent 调用问题/确认工具</span> →
+    <span class="dot">SSE: <code>extension_ui_request</code></span> →
+    <span class="dot">useAgentSession 设置 <code>pendingUiRequest</code></span> →
+    <span class="dot">ChatWindow <code>useEffect</code> 检测变非空 → <code>playAsk()</code></span> →
+    <span class="dot">弹出对话框 + 用户听到提问音</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>任务跑完（不手动中止）时，只要声音开关开着，就一定能听到完成提示音；切后台切回来也应正常响。</li>
+    <li>agent 需要向你提问/要确认（弹出 question / confirm / input / multiple 弹窗）时，会听到一个与完成音不同的提示音。</li>
+    <li>输入区右上角的声音开关仍正常工作，关闭后两者都不响。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不改 useAgentSession 的事件分发逻辑（不新增事件类型、不改 <code>handleAgentEventRef</code> 内部结构），问题只在调用侧接线。</li>
+    <li>不做浏览器原生 <code>Notification</code> 系统通知、不做 TTS 语音朗读任务内容——本期只要提示音。</li>
+    <li>音频节奏/音量不变，保持安静低调，不改主题皮肤相关样式。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li>未知：不同浏览器自动播放策略对“首次 AudioContext 由非用户手势创建”处理有差异；复用单实例已在历史修复（2cb929e）中被验证可行，但当前 main 未含该改动。</li>
+    <li>假设：<code>pendingUiRequest</code> 在弹窗出现时才从 null 变非 null（已在 ChatWindow:543 解构、useAgentSession 里由 <code>setPendingUiRequest</code> 设置，Grounding 已核实）。其只在弹窗消失后回 null，不会在 agent 提问期间重复触发。</li>
+    <li>未知：提问音与“多连问（multiple）”是否要逐问响一次——暂定每次弹窗出现响一次。</li>
+    <li>材料：够。两处主改点（onAgentEnd 传入处、pendingUiRequest 监听、useAudio 播放函数）均已 Read/Grep 核实符号存在。</li>
+  </ul>
+</body>
+</html>

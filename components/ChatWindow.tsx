@@ -516,6 +516,24 @@ export function ChatWindow({
                                onBranchDataChange,
                                onSystemPromptChange,
                            }: Props) {
+    const {soundEnabled, onSoundToggle, playDoneSound, playAskSound} = useAudio();
+    const playDoneSoundRef = useRef(playDoneSound);
+    playDoneSoundRef.current = playDoneSound;
+    const playAskSoundRef = useRef(playAskSound);
+    playAskSoundRef.current = playAskSound;
+    const soundEnabledRef = useRef(soundEnabled);
+    soundEnabledRef.current = soundEnabled;
+
+    // Wrap onAgentEnd so the completion sound fires reliably: useAgentSession calls
+    // this callback on every agent_end, and (unlike patching handleAgentEventRef) it
+    // is not erased by the ref being overwritten on later re-renders.
+    const wrappedOnAgentEnd = useCallback(() => {
+        if (soundEnabledRef.current) {
+            playDoneSoundRef.current();
+        }
+        onAgentEnd?.();
+    }, [onAgentEnd]);
+
     const {
         loading,
         error,
@@ -556,7 +574,6 @@ export function ChatWindow({
         handleFollowUp,
         handleAbortCompaction,
         handleToolPresetChange,
-        handleAgentEventRef,
         clearLoopWarning,
         handleExtensionUIResponse,
         clearUiNotice,
@@ -564,7 +581,7 @@ export function ChatWindow({
         session,
         newSessionCwd,
         onAgentStart,
-        onAgentEnd,
+        onAgentEnd: wrappedOnAgentEnd,
         onSessionCreated,
         onSessionContent,
         onSessionForked,
@@ -572,12 +589,6 @@ export function ChatWindow({
         onBranchDataChange,
         onSystemPromptChange,
     });
-
-    const {soundEnabled, onSoundToggle, playDoneSound} = useAudio();
-    const playDoneSoundRef = useRef(playDoneSound);
-    playDoneSoundRef.current = playDoneSound;
-    const soundEnabledRef = useRef(soundEnabled);
-    soundEnabledRef.current = soundEnabled;
 
     const autoScrollLockedRef = useRef(false);
     // 用户上滚后显示「滚动到底部」按钮，贴底时隐藏
@@ -642,16 +653,14 @@ export function ChatWindow({
         scrollContainerRef,
     ]);
 
-    // Wrap agent event handler to play sound on agent_end
-    const origHandler = handleAgentEventRef.current;
+    // Play the ask sound when the agent raises a question/confirm/input dialog.
+    const prevPendingUiRequestRef = useRef<typeof pendingUiRequest>(null);
     useEffect(() => {
-        handleAgentEventRef.current = (event) => {
-            if (event.type === "agent_end" && soundEnabledRef.current) {
-                playDoneSoundRef.current();
-            }
-            origHandler?.(event);
-        };
-    }, [origHandler, handleAgentEventRef]);
+        if (pendingUiRequest && !prevPendingUiRequestRef.current) {
+            playAskSoundRef.current();
+        }
+        prevPendingUiRequestRef.current = pendingUiRequest;
+    }, [pendingUiRequest]);
 
     const onDrop = useCallback(
         (files: File[]) => {
