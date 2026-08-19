@@ -98,7 +98,7 @@ export function AppShell() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
   // 产物 diff 全屏浮层:点产物触发,显示 HEAD vs 当前改动
-  const [artifactDiff, setArtifactDiff] = useState<{ filePath: string; name: string } | null>(null);
+  const [artifactDiff, setArtifactDiff] = useState<{ filePath: string; name: string; artifacts: { path: string; name: string }[] } | null>(null);
 
   const handleAtMention = useCallback((relativePath: string) => {
     chatInputRef.current?.insertText("`" + relativePath + "`");
@@ -266,9 +266,10 @@ export function AppShell() {
     setRightPanelOpen(true);
   }, [activeFileTabId, rightPanelOpen]);
 
-  // Open a fullscreen diff overlay for a turn's written file (HEAD vs 当前改动)
-  const handleOpenDiff = useCallback((filePath: string, _name: string) => {
-    setArtifactDiff({ filePath, name: _name });
+  // Open a fullscreen diff overlay for a turn's written file (HEAD vs 当前改动).
+  // 传入整批产物,弹窗内以多 tab 加载全部产物可切换。
+  const handleOpenDiff = useCallback((filePath: string, name: string, artifacts?: { path: string; name: string }[]) => {
+    setArtifactDiff({ filePath, name, artifacts: artifacts ?? [{ path: filePath, name }] });
   }, []);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
@@ -459,6 +460,7 @@ export function AppShell() {
     )}
     {artifactDiff && (
       <ArtifactDiffViewer
+        artifacts={artifactDiff.artifacts}
         filePath={artifactDiff.filePath}
         cwd={currentCwd ?? undefined}
         onClose={() => setArtifactDiff(null)}

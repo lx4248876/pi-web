@@ -37,7 +37,7 @@ interface Props {
     ) => void;
     onSystemPromptChange?: (prompt: string | null) => void;
     onOpenFile?: (filePath: string, fileName: string) => void;
-    onOpenDiff?: (filePath: string, fileName: string) => void;
+    onOpenDiff?: (filePath: string, fileName: string, artifacts?: {path: string; name: string}[]) => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {

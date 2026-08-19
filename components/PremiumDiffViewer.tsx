@@ -106,7 +106,7 @@ function Chevi({ open }: { open: boolean }) {
 
 export function PremiumDiffViewer({
   filePath, diffData, historicalDiffHash, isConflict, isWorkingCopy,
-  onClose, onResolveConflict, onRollbackFile, onRollbackHunk,
+  onClose, onResolveConflict, onRollbackFile, onRollbackHunk, tabs,
 }: {
   filePath: string;
   diffData: { oldContent: string; newContent: string };
@@ -117,6 +117,8 @@ export function PremiumDiffViewer({
   onResolveConflict: (filePath: string, mode: "mine" | "theirs") => void;
   onRollbackFile: (filePath: string) => void;
   onRollbackHunk: (filePath: string, oldText: string, newText: string) => void;
+  /** 可选的多文件 tab 栏,渲染在头部与列头之间 */
+  tabs?: { key: string; label: string; active: boolean; onSelect: () => void }[];
 }) {
   const segments = useMemo(() => computeDiff(diffData.oldContent, diffData.newContent), [diffData.oldContent, diffData.newContent]);
   const hunks = useMemo(() => groupIntoHunks(segments), [segments]);
@@ -137,7 +139,7 @@ export function PremiumDiffViewer({
     syncingRef.current = true;
     const s = src === "left" ? leftRef.current : rightRef.current;
     const d = src === "left" ? rightRef.current : leftRef.current;
-    if (s && d) d.scrollTop = s.scrollTop;
+    if (s && d) { d.scrollTop = s.scrollTop; d.scrollLeft = s.scrollLeft; }
     requestAnimationFrame(() => { syncingRef.current = false; });
   }, []);
 
@@ -171,18 +173,18 @@ export function PremiumDiffViewer({
     if (seg.type === "equal") {
       const ln = side === "left" ? seg.oldLine : seg.newLine;
       return (
-        <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH }}>
+        <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, width: "max-content" }}>
           <span style={{ width: 48, textAlign: "right", paddingRight: 8, color: "var(--text-dim)", fontSize: 10, userSelect: "none", flexShrink: 0 }}>{ln}</span>
-          <span style={{ flex: 1, color: "var(--text-muted)", whiteSpace: "pre", overflow: "hidden", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
+          <span style={{ flex: 1, color: "var(--text-muted)", whiteSpace: "pre", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
         </div>
       );
     }
     if (seg.type === "del") {
       if (side === "left") {
         return (
-          <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, background: "rgba(239,68,68,0.1)", borderLeft: "3px solid #ef4444" }}>
+          <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, width: "max-content", background: "rgba(239,68,68,0.1)", borderLeft: "3px solid #ef4444" }}>
             <span style={{ width: 48, textAlign: "right", paddingRight: 8, color: "var(--text-dim)", fontSize: 10, userSelect: "none", flexShrink: 0 }}>{seg.oldLine}</span>
-            <span style={{ flex: 1, color: "#f87171", whiteSpace: "pre", overflow: "hidden", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
+            <span style={{ flex: 1, color: "#f87171", whiteSpace: "pre", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
           </div>
         );
       }
@@ -192,9 +194,9 @@ export function PremiumDiffViewer({
     if (seg.type === "add") {
       if (side === "right") {
         return (
-          <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, background: "rgba(34,197,94,0.1)", borderLeft: "3px solid #22c55e" }}>
+          <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, width: "max-content", background: "rgba(34,197,94,0.1)", borderLeft: "3px solid #22c55e" }}>
             <span style={{ width: 48, textAlign: "right", paddingRight: 8, color: "var(--text-dim)", fontSize: 10, userSelect: "none", flexShrink: 0 }}>{seg.newLine}</span>
-            <span style={{ flex: 1, color: "#4ade80", whiteSpace: "pre", overflow: "hidden", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
+            <span style={{ flex: 1, color: "#4ade80", whiteSpace: "pre", paddingLeft: 4 }}>{seg.text || "\u00a0"}</span>
           </div>
         );
       }
@@ -203,9 +205,9 @@ export function PremiumDiffViewer({
     // replace
     const isLeft = side === "left";
     return (
-      <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, background: "rgba(234,179,8,0.08)", borderLeft: "3px solid #eab308" }}>
+      <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, width: "max-content", background: "rgba(234,179,8,0.08)", borderLeft: "3px solid #eab308" }}>
         <span style={{ width: 48, textAlign: "right", paddingRight: 8, color: "var(--text-dim)", fontSize: 10, userSelect: "none", flexShrink: 0 }}>{isLeft ? seg.oldLine : seg.newLine}</span>
-        <span style={{ flex: 1, color: isLeft ? "#f87171" : "#4ade80", whiteSpace: "pre", overflow: "hidden", paddingLeft: 4 }}>{(isLeft ? seg.oldText : seg.newText) || "\u00a0"}</span>
+        <span style={{ flex: 1, color: isLeft ? "#f87171" : "#4ade80", whiteSpace: "pre", paddingLeft: 4 }}>{(isLeft ? seg.oldText : seg.newText) || "\u00a0"}</span>
       </div>
     );
   };
@@ -228,6 +230,27 @@ export function PremiumDiffViewer({
             <button onClick={onClose} style={{ background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 4, width: 24, height: 24, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
         </div>
+        {tabs && tabs.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "8px 14px", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)", flexShrink: 0 }}>
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={t.onSelect}
+                style={{
+                  padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)", borderRadius: 4, cursor: "pointer",
+                  background: t.active ? "var(--accent)" : "var(--bg-hover)",
+                  color: t.active ? "#fff" : "var(--text-muted)",
+                  border: t.active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                  fontWeight: t.active ? 600 : 400,
+                }}
+                title={t.key}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Column headers */}
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0, background: "var(--bg-panel)" }}>
           <div style={{ flex: 1, padding: "4px 12px", fontSize: 11, fontWeight: 600, color: "var(--text-dim)", borderRight: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", opacity: 0.6 }} />{historicalDiffHash ? "Parent" : "HEAD (原版)"}</div>

@@ -7,7 +7,8 @@ export interface Artifact {
 
 interface Props {
     artifacts: Artifact[];
-    onOpenDiff: (path: string, name: string) => void;
+    /** 传入整批产物,让 diff 弹窗能以多 tab 加载全部产物并切换 */
+    onOpenDiff: (path: string, name: string, artifacts: Artifact[]) => void;
 }
 
 /**
@@ -26,7 +27,7 @@ export function ArtifactStrip({artifacts, onOpenDiff}: Props) {
                 <button
                     key={artifact.path}
                     type="button"
-                    onClick={() => onOpenDiff(artifact.path, artifact.name)}
+                    onClick={() => onOpenDiff(artifact.path, artifact.name, artifacts)}
                     className="rounded border border-color-border bg-color-bg-subtle px-2 py-0.5 text-[12px] text-text-muted transition-colors hover:border-color-accent hover:text-color-accent"
                     title={artifact.path}
                 >
