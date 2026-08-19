@@ -81,6 +81,8 @@ export interface ToolResultMessage {
   content: (TextContent | ImageContent)[];
   isError?: boolean;
   timestamp?: number;
+  /** 工具返回的结构化详情（如 todo 工具的全量清单 detail），由 SDK 原样透传，供展示层专用化渲染 */
+  details?: unknown;
 }
 
 export interface CustomMessage {
@@ -180,7 +182,13 @@ export interface SessionInfo {
   modified: string;
   messageCount: number;
   firstMessage: string;
+  /** 会话最后一条消息的文本，用于历史列表预览“最后一句话”。 */
+  lastMessage: string;
   parentSessionId?: string; // set if this session was forked from another
+  // True for subagent child sessions discovered on disk. They run in separate
+  // pi processes, are NOT interactive RPC sessions, and must only be viewed
+  // read-only (no send / fork / chat input).
+  browseOnly?: boolean;
   // Current status of the session: "running" (spinner), "completed" (green)
   // or "failed" (red). Omitted/undefined when the file tail can't tell (no dot).
   status?: "running" | "completed" | "failed";

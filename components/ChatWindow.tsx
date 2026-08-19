@@ -2,7 +2,12 @@
 
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import type {AgentMessage, SessionInfo, SessionTreeNode} from "@/lib/types";
+import {extractArtifacts} from "@/lib/artifacts";
+import {getFileName} from "@/lib/file-paths";
 import {MessageView} from "./MessageView";
+import {ArtifactStrip} from "./ArtifactStrip";
+// todo 清单统一在输入框上方维护（default 折叠，点击展开）
+import {TodoStrip, latestTodoDetails} from "./TodoPanel";
 import {ChatInput, type ChatInputHandle} from "./ChatInput";
 import {ChatMinimap, useMessageRefs} from "./ChatMinimap";
 import {
@@ -31,6 +36,8 @@ interface Props {
         onLeafChange: (leafId: string | null) => void,
     ) => void;
     onSystemPromptChange?: (prompt: string | null) => void;
+    onOpenFile?: (filePath: string, fileName: string) => void;
+    onOpenDiff?: (filePath: string, fileName: string) => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -128,6 +135,8 @@ function ExtensionUIDialog({
     // 多问题：每个问题各自的选中项（有 options 的）与文本输入（无 options 的）
     const [selections, setSelections] = useState<Record<number, string>>({});
     const [inputs, setInputs] = useState<Record<number, string>>({});
+    // 多问题：当前展示第几题（0 基），分页展示，每题一页
+    const [page, setPage] = useState(0);
     // 单问题（select）：除了点选项，还允许手输自定义答案兜底
     const [custom, setCustom] = useState("");
 
@@ -136,6 +145,7 @@ function ExtensionUIDialog({
         setSelections({});
         setInputs({});
         setCustom("");
+        setPage(0);
     }, [
         request.id,
         request.method,
@@ -157,6 +167,12 @@ function ExtensionUIDialog({
         if (!text) return;
         onResponse({ type: "extension_ui_response", id: request.id, value: text });
     };
+
+    // 多问题：总题数、当前是否首/末页，用于分页导航
+    const questionCount =
+        request.method === "multiple" ? request.questions.length : 0;
+    const isFirstPage = page === 0;
+    const isLastPage = page >= questionCount - 1;
 
     // 多问题：校验每问都已作答（选项选中 或 自定义输入），按序收集答案数组回传
     const multipleAnswered = useMemo(() => {
@@ -274,70 +290,89 @@ function ExtensionUIDialog({
 
                 {request.method === "multiple" && (
                     <div className="flex flex-col gap-4">
-                        {request.questions.map((q, qi) => (
-                            <div key={qi} className="flex flex-col gap-2">
-                                <div
-                                    className="text-sm font-semibold"
-                                    style={{ color: "var(--text)" }}
-                                >
-                                    {qi + 1}. {q.question}
-                                </div>
-                                {q.options && q.options.length > 0 ? (
-                                    <div className="flex flex-col gap-2">
-                                        {q.options.map((opt) => {
-                                            const selected = selections[qi] === opt;
-                                            return (
-                                                <button
-                                                    key={opt}
-                                                    onClick={() =>
-                                                        setSelections((s) => ({
-                                                            ...s,
-                                                            [qi]: opt,
-                                                        }))
-                                                    }
-                                                    className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-hover)]"
-                                                    style={{
-                                                        border: selected
-                                                            ? "1px solid var(--accent)"
-                                                            : "1px solid var(--border)",
-                                                        borderRadius: 6,
-                                                        padding: "9px 10px",
-                                                        color: "var(--text)",
-                                                        whiteSpace: "pre-line",
-                                                        lineHeight: 1.5,
-                                                    }}
-                                                >
-                                                    {opt}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                ) : null}
-                                <input
-                                    value={inputs[qi] ?? ""}
-                                    placeholder={
-                                        q.options && q.options.length > 0
-                                            ? "或输入自定义答案…"
-                                            : (q.placeholder ?? "输入答案…")
-                                    }
-                                    onChange={(e) =>
-                                        setInputs((s) => ({ ...s, [qi]: e.target.value }))
-                                    }
-                                    onKeyDown={(e) => {
-                                        if (e.key === "Enter") submitMultiple();
-                                        if (e.key === "Escape") cancel();
-                                    }}
-                                    className="w-full text-sm outline-none"
-                                    style={{
-                                        background: "var(--bg)",
-                                        border: "1px solid var(--border)",
-                                        borderRadius: 6,
-                                        color: "var(--text)",
-                                        padding: "9px 10px",
-                                    }}
-                                />
+                        {questionCount > 0 && (
+                            <div
+                                className="text-xs"
+                                style={{ color: "var(--text-muted)" }}
+                            >
+                                第 {page + 1} / {questionCount} 题
                             </div>
-                        ))}
+                        )}
+                        {request.questions.slice(page, page + 1).map((q, qi) => {
+                            const idx = page + qi;
+                            return (
+                                <div key={idx} className="flex flex-col gap-2">
+                                    <div
+                                        className="text-sm font-semibold"
+                                        style={{ color: "var(--text)" }}
+                                    >
+                                        {idx + 1}. {q.question}
+                                    </div>
+                                    {q.options && q.options.length > 0 ? (
+                                        <div className="flex flex-col gap-2">
+                                            {q.options.map((opt) => {
+                                                const selected =
+                                                    selections[idx] === opt;
+                                                return (
+                                                    <button
+                                                        key={opt}
+                                                        onClick={() =>
+                                                            setSelections((s) => ({
+                                                                ...s,
+                                                                [idx]: opt,
+                                                            }))
+                                                        }
+                                                        className="w-full text-left text-sm transition-colors hover:bg-[var(--bg-hover)]"
+                                                        style={{
+                                                            border: selected
+                                                                ? "1px solid var(--accent)"
+                                                                : "1px solid var(--border)",
+                                                            borderRadius: 6,
+                                                            padding: "9px 10px",
+                                                            color: "var(--text)",
+                                                            whiteSpace:
+                                                                "pre-line",
+                                                            lineHeight: 1.5,
+                                                        }}
+                                                    >
+                                                        {opt}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : null}
+                                    <input
+                                        value={inputs[idx] ?? ""}
+                                        placeholder={
+                                            q.options && q.options.length > 0
+                                                ? "或输入自定义答案…"
+                                                : (q.placeholder ?? "输入答案…")
+                                        }
+                                        onChange={(e) =>
+                                            setInputs((s) => ({
+                                                ...s,
+                                                [idx]: e.target.value,
+                                            }))
+                                        }
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                if (isLastPage) submitMultiple();
+                                                else setPage((p) => p + 1);
+                                            }
+                                            if (e.key === "Escape") cancel();
+                                        }}
+                                        className="w-full text-sm outline-none"
+                                        style={{
+                                            background: "var(--bg)",
+                                            border: "1px solid var(--border)",
+                                            borderRadius: 6,
+                                            color: "var(--text)",
+                                            padding: "9px 10px",
+                                        }}
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
 
@@ -443,27 +478,75 @@ function ExtensionUIDialog({
                             </button>
                         </>
                     ) : request.method === "multiple" ? (
-                        <button
-                            onClick={submitMultiple}
-                            disabled={!multipleAnswered}
-                            className="text-sm"
-                            style={{
-                                border: "1px solid var(--accent)",
-                                borderRadius: 6,
-                                background: multipleAnswered
-                                    ? "var(--accent)"
-                                    : "var(--bg-selected)",
-                                color: multipleAnswered
-                                    ? "white"
-                                    : "var(--text-muted)",
-                                padding: "7px 12px",
-                                cursor: multipleAnswered
-                                    ? "pointer"
-                                    : "not-allowed",
-                            }}
-                        >
-                            {multipleAnswered ? "提交" : "请完成所有问题"}
-                        </button>
+                        !isLastPage ? (
+                            <>
+                                {!isFirstPage && (
+                                    <button
+                                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                                        className="text-sm transition-colors hover:bg-[var(--bg-hover)]"
+                                        style={{
+                                            border: "1px solid var(--border)",
+                                            borderRadius: 6,
+                                            color: "var(--text)",
+                                            padding: "7px 12px",
+                                        }}
+                                    >
+                                        上一题
+                                    </button>
+                                )}
+                                <button
+                                    onClick={() => setPage((p) => p + 1)}
+                                    className="text-sm"
+                                    style={{
+                                        border: "1px solid var(--accent)",
+                                        borderRadius: 6,
+                                        background: "var(--accent)",
+                                        color: "white",
+                                        padding: "7px 12px",
+                                    }}
+                                >
+                                    下一题
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {!isFirstPage && (
+                                    <button
+                                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                                        className="text-sm transition-colors hover:bg-[var(--bg-hover)]"
+                                        style={{
+                                            border: "1px solid var(--border)",
+                                            borderRadius: 6,
+                                            color: "var(--text)",
+                                            padding: "7px 12px",
+                                        }}
+                                    >
+                                        上一题
+                                    </button>
+                                )}
+                                <button
+                                    onClick={submitMultiple}
+                                    disabled={!multipleAnswered}
+                                    className="text-sm"
+                                    style={{
+                                        border: "1px solid var(--accent)",
+                                        borderRadius: 6,
+                                        background: multipleAnswered
+                                            ? "var(--accent)"
+                                            : "var(--bg-selected)",
+                                        color: multipleAnswered
+                                            ? "white"
+                                            : "var(--text-muted)",
+                                        padding: "7px 12px",
+                                        cursor: multipleAnswered
+                                            ? "pointer"
+                                            : "not-allowed",
+                                    }}
+                                >
+                                    {multipleAnswered ? "提交" : "请完成所有问题"}
+                                </button>
+                            </>
+                        )
                     ) : request.method === "select" ? (
                         custom.trim() ? (
                             <button
@@ -515,6 +598,8 @@ export function ChatWindow({
                                chatInputRef,
                                onBranchDataChange,
                                onSystemPromptChange,
+                               onOpenFile,
+                               onOpenDiff,
                            }: Props) {
     const {soundEnabled, onSoundToggle, playDoneSound, playAskSound} = useAudio();
     const playDoneSoundRef = useRef(playDoneSound);
@@ -555,6 +640,7 @@ export function ChatWindow({
         sessionStats,
         agentPhase,
         isNew,
+        browseOnly,
         isAborting,
         sseState,
         loopWarning,
@@ -680,6 +766,9 @@ export function ChatWindow({
     const visibleMessages = messages.filter(
         (m) => m.role === "user" || m.role === "assistant",
     );
+
+    // 会话级 todo 状态：扫全部消息，取最后一份含 details.todos 的结果（“当前清单”）。
+    const latestTodos = useMemo(() => latestTodoDetails(messages), [messages]);
     const messageRefs = useMessageRefs(visibleMessages.length);
 
     // Report this session's streaming state to the shell so the sidebar can
@@ -691,7 +780,11 @@ export function ChatWindow({
     const isEmptyNew =
         isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
 
-    const chatInputElement = (
+    const chatInputElement = browseOnly ? (
+        <div className="flex items-center justify-center gap-2 border-t border-border-quiet bg-panel px-4 py-3 text-xs text-text-muted">
+            <span>👁 只读查看子代理会话 · 不可发送/分叉</span>
+        </div>
+    ) : (
         <ChatInput
             ref={chatInputRef}
             onSend={handleSend}
@@ -950,6 +1043,7 @@ export function ChatWindow({
                             </div>
                         )}
 
+                        <TodoStrip details={latestTodos}/>
                         {chatInputElement}
                     </div>
                 </div>
@@ -999,13 +1093,16 @@ export function ChatWindow({
                                             msg.role === "user" || msg.role === "assistant";
                                         const currentRefIdx = isVisible ? refIdx++ : -1;
                                         let showTimestamp = false;
+                                        let isLastAssistantInTurn = false;
                                         if (msg.role === "assistant") {
                                             showTimestamp = true;
+                                            isLastAssistantInTurn = true;
                                             for (let j = idx + 1; j < messages.length; j++) {
                                                 const r = messages[j].role;
                                                 if (r === "user") break;
                                                 if (r === "assistant") {
                                                     showTimestamp = false;
+                                                    isLastAssistantInTurn = false;
                                                     break;
                                                 }
                                             }
@@ -1016,6 +1113,32 @@ export function ChatWindow({
                                                 idx === messages.length - 1
                                             ) {
                                                 showTimestamp = false;
+                                            }
+                                        }
+                                        // Turn-scoped written-file artifacts (only for the last assistant message
+                                        // of each turn, and hidden while that turn is still streaming).
+                                        let artifactList: {path: string; name: string}[] = [];
+                                        if (isLastAssistantInTurn && (onOpenFile || onOpenDiff)) {
+                                            let segStart = 0;
+                                            for (let j = idx - 1; j >= 0; j--) {
+                                                if (messages[j].role === "user") {
+                                                    segStart = j + 1;
+                                                    break;
+                                                }
+                                            }
+                                            let segEnd = messages.length;
+                                            for (let j = idx + 1; j < messages.length; j++) {
+                                                if (messages[j].role === "user") {
+                                                    segEnd = j;
+                                                    break;
+                                                }
+                                            }
+                                            const stillStreamingTail =
+                                                segEnd === messages.length && agentRunning;
+                                            if (!stillStreamingTail) {
+                                                artifactList = extractArtifacts(
+                                                    messages.slice(segStart, segEnd),
+                                                ).map((p) => ({path: p, name: getFileName(p)}));
                                             }
                                         }
                                         const view = (
@@ -1074,6 +1197,12 @@ export function ChatWindow({
                                                 }}
                                             >
                                                 {view}
+                                                {isLastAssistantInTurn && artifactList.length > 0 && (onOpenFile || onOpenDiff) && (
+                                                    <ArtifactStrip
+                                                        artifacts={artifactList}
+                                                        onOpenDiff={onOpenDiff ?? onOpenFile ?? (() => {})}
+                                                    />
+                                                )}
                                             </div>
                                         );
                                     });
@@ -1209,6 +1338,7 @@ export function ChatWindow({
                                 onResponse={handleExtensionUIResponse}
                             />
                         )}
+                        <TodoStrip details={latestTodos}/>
                         {chatInputElement}
                     </div>
                 </>

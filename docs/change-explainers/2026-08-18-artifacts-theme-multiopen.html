@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>改动理解：产物横条增强（主题跟随 + 当轮多开）</title>
+<style>
+  :root{--b:#e2e8f0;--m:#64748b;--t:#0f172a;--p:#f8fafc;--a:#2563eb;--mn:#1e3a8a;--db:#f1f5f9}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--t);max-width:860px;margin:0 auto;padding:32px 20px 64px;line-height:1.66}
+  h1{font-size:23px;margin:0 0 6px}
+  h2{font-size:17px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--b)}
+  p{margin:8px 0}
+  .muted{color:var(--m);font-size:13px}
+  .badge{display:inline-block;background:var(--a);color:#fff;border-radius:4px;padding:1px 8px;font-size:12px;font-weight:600;margin-right:8px}
+  code{background:var(--db);padding:1px 5px;border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em}
+  .card{border:1px solid var(--b);border-left-width:4px;border-radius:8px;padding:12px 14px;margin:10px 0;background:#fff}
+  .card.main{border-left-color:var(--mn)}
+  .tag{font-size:11px;font-weight:600;letter-spacing:.05em;margin-right:8px;text-transform:uppercase;color:var(--mn)}
+  details{margin-top:8px}summary{cursor:pointer;color:var(--m);font-size:13px}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--p);border:1px solid var(--b);border-radius:8px;padding:12px 14px;font-size:13px}
+  .flow .s{background:#fff;border:1px solid var(--b);border-radius:6px;padding:4px 10px}
+  .flow .a{color:var(--m)}
+  ul{padding-left:22px}li{margin:5px 0}
+</style>
+</head>
+<body>
+  <h1>改动理解：产物横条增强（主题跟随 + 当轮多开）</h1>
+  <p class="muted"><span class="badge">Standard</span> 生成于 2026-08-18；基于仓库当前只读核实。这是对刚交付的「每轮产物横条」的叠加增强，基线讲解页见 <code>2026-08-18-artifacts-strip(-complete).html</code>。</p>
+
+  <h2>一句话</h2>
+  <p>两条互不相关的小增强：① 文件查看器里预览 <strong>HTML 文件时跟随 web 页面的明暗主题</strong>；② 产物横条点任一文件时，<strong>把「当前这一轮」的其它产物也一起开成标签页</strong>，在标签栏切换，范围限定当轮、不无限累计。</p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <span class="tag">改动A</span><code>components/FileViewer.tsx</code> · HTML 预览主题
+    <p class="muted">让没有自带明暗色的 HTML 文件预览跟随 web 页面主题。</p>
+    <details><summary>怎么改 / 为什么</summary>
+      <p>现有 HTML 预览用 <code>iframe srcDoc={content}</code>，内嵌文档没有主题信息，短 HTML 永远白底黑字。改动：渲染预览时，把 web 页面当前主题对应的 <code>color-scheme</code> 与基础背景/文字色一并注入到 <code>srcDoc</code>（低优先级，文件自带样式仍优先生效）。此时组件里已有 <code>useTheme()</code> 的 <code>isDark</code>，切主题会重新计算注入、实时跟随。文件自己写了背景/文字的，会照旧用自己的样式，不受影响。</p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <span class="tag">改动B</span><code>components/ArtifactStrip.tsx</code> · 当轮多开
+    <p class="muted">点横条任一个文件 → 把该轮所有产物一起开成标签页，点中的那个保持激活。</p>
+    <details><summary>怎么改 / 为什么</summary>
+      <p>横条已持有当前轮的 <code>artifacts[]</code> 与 <code>onOpenFile</code>。改 chip 的 click：不再只开点中的那个，而是把当前轮的去重文件逐个开成标签（复用现有 <code>onOpenFile</code> → <code>AppShell.handleOpenFile</code>，它本身按文件路径去重，不会重复），并把<strong>点中的那个</strong>作为最后一个处理，使其在标签栏成为当前激活页。范围就是这一轮的几个文件，不跨轮累计；其它轮的横条各自独立。纯 <code>ArtifactStrip.tsx</code> 单点改动，不动 AppShell / ChatWindow。</p>
+    </details>
+  </div>
+
+  <h2>逻辑链路</h2>
+
+  <div class="flow">改动A：<span class="s">打开 HTML 文件</span><span class="a">→</span><span class="s">切到 Preview</span><span class="a">→</span><span class="s">按当前 isDark 注入 color-scheme/底色文字</span><span class="a">→</span><span class="s">预览跟随主题，切主题实时变</span></div>
+  <div class="flow" style="margin-top:8px">改动B：<span class="s">点产物横条一个文件</span><span class="a">→</span><span class="s">逐个 openFile(该轮全部去重文件)</span><span class="a">→</span><span class="s">点中的最后处理 = 激活</span><span class="a">→</span><span class="s">文件查看器多标签页，随便切换</span></div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>（改动A）深色模式下看一个没写背景色的 HTML，预览是深底浅字；切到浅色变白底黑字。</li>
+    <li>（改动B）点横条上一个产物，文件查看器标签栏一次出现该轮全部的产物文件，想切哪个切哪个；点其它轮横条只开那一轮的，互不混叠。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不动文件查看器本体、tab 去重逻辑、AppShell/ChatWindow 的接线程（已够用）。</li>
+    <li>不动 HTML 预览的 sandbox / 执行脚本能力。</li>
+    <li>不做「会话级累计汇总 / 全部自动开」（你已明确“不累计”）。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li><strong>假设（改动A）</strong>：注入用低优先级选择器，文件自带样式优先；带完整 <code>html/body</code> 背景色的 HTML 保持自身样式，只有空白背景/未定色的才跟随主题。极端自定义样式可能不完全跟随，属预期。</li>
+    <li><strong>假设（改动B）</strong>：同一轮产物之间路径不重复（提取层已去重）；点某个 chip 时以「该 chip 对应文件」作为激活页。</li>
+    <li><strong>材料</strong>：够——<code>FileViewer.tsx</code> 预览 iframe、<code>useTheme().isDark</code>、<code>ArtifactStrip.tsx</code>、<code>AppShell.handleOpenFile</code>（多标签去重）均已核实。</li>
+  </ul>
+</body>
+</html>

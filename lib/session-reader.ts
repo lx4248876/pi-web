@@ -2,7 +2,8 @@ import { SessionManager, buildSessionContext as piBuildSessionContext, getAgentD
 import type { SessionEntry, SessionInfo, SessionContext, SessionTreeNode, AssistantMessage } from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 export { getAgentDir };
 
@@ -20,12 +21,18 @@ const STATUS_TAIL_BYTES = 128 * 1024;
 
 type SessionStatus = "completed" | "failed" | null;
 
+// 一次尾部读取同时产出：终态状态 + 最后一条消息文本（供历史列表预览）。
+interface SessionTailInfo {
+  status: SessionStatus;
+  lastMessage: string;
+}
+
 // ─── 状态推导缓存 ────────────────────────────────────────────────────────────
 // /api/sessions 每次刷新都会对每个会话文件做尾部读取+解析；会话多时是列表
 // 「慢半拍」的主因。文件没变（mtime+size 相同）时直接复用上次推导结果。
 // 注册表挂 globalThis 以免 dev-server 热重载后缓存失效。
 const statusCacheG = globalThis as typeof globalThis & {
-  __piSessionStatusCache?: Map<string, { mtimeMs: number; size: number; status: SessionStatus }>;
+  __piSessionStatusCache?: Map<string, { mtimeMs: number; size: number; tail: SessionTailInfo | null }>;
 };
 
 function getStatusCache() {
@@ -91,6 +98,16 @@ function deriveStatusFromMessage(msg: ClientMessageLike | undefined | null): Ses
 }
 
 export function readSessionStatus(filePath: string): SessionStatus {
+  return getCachedSessionTail(filePath)?.status ?? null;
+}
+
+// 最后一条消息的文本；无消息/解析失败返回空串。与 readSessionStatus 共用
+// 同一缓存，避免对同一个文件做两次尾部 IO。
+export function readSessionLastMessage(filePath: string): string {
+  return getCachedSessionTail(filePath)?.lastMessage ?? "";
+}
+
+function getCachedSessionTail(filePath: string): SessionTailInfo | null {
   let st: { mtimeMs: number; size: number };
   try {
     const s = statSync(filePath);
@@ -101,12 +118,14 @@ export function readSessionStatus(filePath: string): SessionStatus {
 
   const cache = getStatusCache();
   const hit = cache.get(filePath);
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
-    return hit.status;
+  // tail !== undefined 兜底：dev 热重载后 globalThis 缓存里可能是旧格式 {status}
+  // (无 tail) 的残留条目，命中时不返回，按未命中重新算一次。
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size && hit.tail !== undefined) {
+    return hit.tail;
   }
 
-  const status = readSessionStatusFromTail(filePath);
-  cache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, status });
+  const tail = readSessionTail(filePath);
+  cache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, tail });
   // 粗防泄漏：缓存条目超过会话文件数量一个量级时清理失效路径
   if (cache.size > 2000) {
     for (const key of cache.keys()) {
@@ -114,12 +133,28 @@ export function readSessionStatus(filePath: string): SessionStatus {
       if (cache.size <= 1000) break;
     }
   }
-  return status;
+  return tail;
 }
 
-function readSessionStatusFromTail(filePath: string): SessionStatus {
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        const block = b as { type?: string; text?: unknown } | null | undefined;
+        return block?.type === "text" && typeof block.text === "string"
+          ? block.text
+          : "";
+      })
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+function readSessionTail(filePath: string): SessionTailInfo {
   const tail = readFileTail(filePath);
-  if (tail === null) return null;
+  if (tail === null) return { status: null, lastMessage: "" };
 
   let lastMessage: ClientMessageLike | null = null;
   for (const line of tail.split("\n")) {
@@ -134,9 +169,164 @@ function readSessionStatusFromTail(filePath: string): SessionStatus {
     if (entry?.type !== "message" || !entry.message) continue;
     lastMessage = entry.message;
   }
-  return deriveStatusFromMessage(lastMessage);
+  return {
+    status: deriveStatusFromMessage(lastMessage),
+    lastMessage: lastMessage ? messageText(lastMessage.content) : "",
+  };
 }
 
+// ─── 子代理（子会话）发现 ═══════════════════════════════════════════════════
+// pi-subagents 把子代理作为独立 pi 进程运行，子会话文件写入
+// `sessions/<父id>/async-*`、`chain-runs`、`dynamic-*` 等两层深的子目录。
+// pi 的 SessionManager.listAll() 只扫 `sessions/<dir>/*.jsonl` 一层，看不到它们，
+// 因此这里补一个针对性扫描（只读），把它们带进列表并标 browseOnly。
+// 注：`sessions/<dir>` 一层内的 .jsonl 已由 listAll 覆盖，本扫描只收集更深一层的。
+
+export interface ChildSessionInfo {
+  path: string;
+  id: string;
+  cwd: string;
+  /** Session header timestamp（ISO）。 */
+  created: string;
+  /** 父会话文件绝对路径（来自 child header 的 parentSession 字段）。 */
+  parentSessionPath?: string;
+}
+
+interface ParsedChildHeader {
+  id: string;
+  cwd: string;
+  timestamp: string;
+  parentSessionPath?: string;
+}
+
+// 只读会话文件第一行（session header），失败返回 null（跳过坏文件）。
+export function parseChildSessionHeader(filePath: string): ParsedChildHeader | null {
+  let first: string;
+  try {
+    first = readFileSync(filePath, "utf8").split("\n", 1)[0] ?? "";
+  } catch {
+    return null;
+  }
+  if (!first.trim()) return null;
+  let obj: { type?: unknown; id?: unknown; cwd?: unknown; timestamp?: unknown; parentSession?: unknown };
+  try {
+    obj = JSON.parse(first) as typeof obj;
+  } catch {
+    return null;
+  }
+  if (obj.type !== "session" || typeof obj.id !== "string") return null;
+  return {
+    id: obj.id,
+    cwd: typeof obj.cwd === "string" ? obj.cwd : "",
+    timestamp: typeof obj.timestamp === "string" ? obj.timestamp : "",
+    parentSessionPath:
+      typeof obj.parentSession === "string" ? obj.parentSession : undefined,
+  };
+}
+
+// 收集 `sessions/<父id>/<runSubdir>/*.jsonl` 这类两层深的子会话文件。
+// 只入一层子目录再入一层“运行子目录”，避免与 listAll 覆盖的一层重复，且防无限递归。
+export function scanChildSessions(sessionsDir: string): ChildSessionInfo[] {
+  let parents;
+  try {
+    parents = readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const found: ChildSessionInfo[] = [];
+  for (const parentEntry of parents) {
+    if (!parentEntry.isDirectory()) continue;
+    const parentDir = join(sessionsDir, parentEntry.name);
+    let inner;
+    try {
+      inner = readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const runEntry of inner) {
+      if (!runEntry.isDirectory()) continue; // 一层内 .jsonl 由 listAll 负责，跳过
+      const runDir = join(parentDir, runEntry.name);
+      let files: string[];
+      try {
+        files = readdirSync(runDir).filter((f) => f.endsWith(".jsonl"));
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        const p = join(runDir, f);
+        const h = parseChildSessionHeader(p);
+        if (!h) continue;
+        found.push({
+          path: p,
+          id: h.id,
+          cwd: h.cwd,
+          created: h.timestamp,
+          parentSessionPath: h.parentSessionPath,
+        });
+      }
+    }
+  }
+  return found;
+}
+
+// 子会话路径集（TTL 缓存）：供共享 RPC 入口判断某个 id 是否为只读子会话，
+// 防止对它 startRpcSession / 发命令。
+const CHILD_PATH_TTL_MS = 5000;
+const childPathCacheG = globalThis as typeof globalThis & {
+  __piChildPaths?: { t: number; paths: Set<string> };
+};
+
+export function isChildSessionPath(filePath: string): boolean {
+  return isChildSessionPathIn(getSessionsDir(), filePath);
+}
+
+export function isChildSessionPathIn(sessionsDir: string, filePath: string): boolean {
+  const now = Date.now();
+  const cached = childPathCacheG.__piChildPaths;
+  if (cached && now - cached.t < CHILD_PATH_TTL_MS) {
+    return cached.paths.has(filePath);
+  }
+  let paths: string[];
+  try {
+    paths = scanChildSessions(sessionsDir).map((c) => c.path);
+  } catch {
+    paths = [];
+  }
+  childPathCacheG.__piChildPaths = { t: now, paths: new Set(paths) };
+  return childPathCacheG.__piChildPaths.paths.has(filePath);
+}
+
+// 子会话文件的最后修改时间（ISO）；读取失败回退 header created。
+function readChildMtime(filePath: string): string {
+  try {
+    const m = statSync(filePath).mtime;
+    return m instanceof Date && !Number.isNaN(m.getTime()) ? m.toISOString() : "";
+  } catch {
+    return "";
+  }
+}
+
+// 运行中 heuristic：文件刚被碰过且 tail 未收尾（无终态）→ 视为仍在跑（转圈）。
+const LIVE_ACTIVE_MS = 10_000;
+export function readChildLiveStatus(filePath: string): "running" | "completed" | "failed" | null {
+  const terminal = readSessionStatus(filePath);
+  if (terminal) return terminal;
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
+  // 有消息且近期仍在写 → running；否则无终态判定。
+  if (readSessionLastMessage(filePath) && Date.now() - mtimeMs < LIVE_ACTIVE_MS) {
+    return "running";
+  }
+  return null;
+}
+
+// ============================================================================
+// Session listing (top-level) + subagent child merge
+// ============================================================================
 export async function listAllSessions(options?: {
   /** Ids of sessions currently live in the process; they report status "running". */
   runningSessionIds?: Set<string>;
@@ -146,7 +336,7 @@ export async function listAllSessions(options?: {
   for (const s of piSessions) pathToId.set(s.path, s.id);
 
   const cache = getPathCache();
-  return piSessions.map((s) => {
+  const result: SessionInfo[] = piSessions.map((s) => {
     // Populate path cache so resolveSessionPath works without a full scan
     cache.set(s.id, s.path);
     return {
@@ -158,6 +348,7 @@ export async function listAllSessions(options?: {
       modified: s.modified instanceof Date ? s.modified.toISOString() : String(s.modified),
       messageCount: s.messageCount,
       firstMessage: s.firstMessage || "(no messages)",
+      lastMessage: readSessionLastMessage(s.path),
       parentSessionId: s.parentSessionPath ? pathToId.get(s.parentSessionPath) : undefined,
       // A still-live session shows "running" (spinner dot), others derive done/failed from their file tail.
       status: options?.runningSessionIds?.has(s.id)
@@ -165,6 +356,52 @@ export async function listAllSessions(options?: {
         : readSessionStatus(s.path) ?? undefined,
     };
   });
+
+  // Merge subagent child sessions (nested two levels deep) as browse-only entries.
+  // Child sessions run in separate pi processes and are NOT live RPC sessions here,
+  // so they must never be treatable as interactive RPC targets.
+  const knownPaths = new Set<string>();
+  for (const s of piSessions) knownPaths.add(s.path);
+  let childSessions: ChildSessionInfo[] = [];
+  try {
+    childSessions = scanChildSessions(getSessionsDir());
+  } catch {
+    childSessions = [];
+  }
+  for (const child of childSessions) {
+    if (knownPaths.has(child.path)) continue;
+    knownPaths.add(child.path);
+    cache.set(child.id, child.path);
+    const parentSessionId = child.parentSessionPath
+      ? pathToId.get(child.parentSessionPath)
+      : undefined;
+    const liveStatus = readChildLiveStatus(child.path);
+    result.push({
+      path: child.path,
+      id: child.id,
+      cwd: child.cwd,
+      name: undefined,
+      created: child.created,
+      modified: readChildMtime(child.path),
+      messageCount: 0,
+      firstMessage: "(subagent)",
+      lastMessage: readSessionLastMessage(child.path),
+      parentSessionId,
+      browseOnly: true,
+      // Live heuristic: recent writes + no terminal tail => running spinner;
+      // otherwise completed/failed from the file tail.
+      status: liveStatus ?? undefined,
+    });
+  }
+
+  // 与 isChildSessionPath 的 TTL 缓存保持同步：本次扫描拿到最新子会话集，
+  // 直接刷新，避免 5s 窗口内新建的子会话被发现后仍可被交互入口启动。
+  childPathCacheG.__piChildPaths = {
+    t: Date.now(),
+    paths: new Set(childSessions.map((c) => c.path)),
+  };
+
+  return result;
 }
 
 // ============================================================================

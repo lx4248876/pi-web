@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>本次改动：web 页面能看到子代理（只读实时查看）</title>
+<style>
+:root{--ink:#1d2733;--muted:#6b7686;--line:#e2e6ec;--bg:#f6f7f9;--card:#fff;--main:#0b6bcb;--main-bg:#e9f3fd;--ok:#0b7a3b;--risk:#b3261e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 -apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;padding:28px 20px 90px}
+.wrap{max-width:880px;margin:0 auto}h1{font-size:24px;margin:0 0 6px}h2{font-size:18px;margin:34px 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
+p{margin:8px 0}.muted{color:var(--muted);font-size:13px}code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:#eef1f5;padding:1px 5px;border-radius:4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:13px 15px;margin:10px 0}.ok{color:var(--ok);font-weight:600}.risklbl{color:var(--risk);font-weight:600}
+summary{cursor:pointer;color:var(--main);font-size:13px;user-select:none}.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}
+.flow .step{background:var(--main-bg);color:var(--main);border:1px solid #c5e0f8;padding:2px 10px;border-radius:12px;font-size:13px}.flow .arrow{color:var(--muted)}
+ul{margin:6px 0;padding-left:20px}li{margin:5px 0}details{margin-top:6px}details pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;overflow:auto;font-size:12px;}
+button{background:var(--main);color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px}
+.howto{background:#f0f7ff;border:1px solid #bcd7f5;border-radius:8px;padding:12px 14px}
+.notice{background:#fff4f0;border:1px solid #f3c6ba;color:var(--risk);border-radius:8px;padding:10px 14px;margin:12px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>本次改动：web 页面能看到子代理（只读实时查看）</h1>
+<p class="muted">实现完成讲解页 · 2026-08-19 · 基于真实 diff · C:/A-codes/lix/pi-web</p>
+
+<h2>一句话结论</h2>
+<p><b>以前：</b>你的主会话派生的子代理（subagent）跑在自己的会话文件里，藏在 `sessions/父会话/async-*/` 两三层的子目录中，web 侧栏完全看不到它。</p>
+<p><b>现在：</b>web 会把这些子会话<b>递归捞进侧栏父会话下面</b>（带运行/完成/失败状态点）；点开任意一个就能<b>只读实时看它在想什么、调了什么</b>（随跑随刷），且<b>绝不会被当成可交互会话去启动/接管</b>。</p>
+
+<h2>生活类比</h2>
+<p>想象主会话是「项目经理」，派出去干活的子代理是「外包小组」。以前外包小组在自己的工位（独立进程+独立文件夹）干活，会议室（web 页面）只摆着项目经理，你看不到小组在干啥。现在给会议室加了一块<b>单向玻璃监控屏</b>：可以实时看到外包小组接下来做的每一步，但<b>你没法往玻璃里递纸条/下指令</b>——他们仍是独立团队，你只是旁观。改动就是装这块「只读监控屏」：把小组的文件夹找出来、接上实时画面、并保证监控屏只有只读镜头、不给命令通道。</p>
+
+<h2>人话链路</h2>
+<div class="flow">
+<span class="step">你在 web 派子代理</span><span class="arrow">→</span>
+<span class="step">子代理独立进程写自己 sessions/父/async-* 文件</span><span class="arrow">→</span>
+<span class="step">web 会话列表递归扫到它们</span><span class="arrow">→</span>
+<span class="step">侧栏父会话下冒出子节点（转圈=运行中）</span><span class="arrow">→</span>
+<span class="step">点击子会话</span><span class="arrow">→</span>
+<span class="step">只读快照 + 只读尾读 SSE 实时刷新</span><span class="arrow">→</span>
+<span class="step">子代跑完→绿/红点，跟随停止，输入框隐藏</span>
+</div>
+
+<h2>动了哪几块</h2>
+<div class="card">
+<b>① 会话列表发现子会话</b> — <code>lib/session-reader.ts</code>
+<p>给会话列表补一个递归扫描，把两层深的子会话文件收进来，标记 <code>browseOnly:true</code>（只读）。顺带推导它的运行/完成/失败状态。</p>
+<details><summary>看代码区折叠</summary><pre>
+scanChildSessions(dir)      // 递归扫 sessions/父id/*/async-*/*.jsonl
+isChildSessionPath(dir,file)// 某文件是不是子会话（供红线防护用，带 5s 缓存并与列表同步刷新）
+readChildLiveStatus(file)   // 文件还在写+未终态 = 运行中转圈
+listAllSessions()           // 末尾把子会话合并进列表（browseOnly:true）
+</pre></details>
+</div>
+
+<div class="card">
+<b>② 只读实时尾读</b> — <code>lib/subagent-live.ts</code> + <code>app/api/subagents/[id]/events</code>（新增）
+<p>新增纯只读的 SSE 通道：反复读子会话文件、把「新增的消息」推给前端。它是唯一给子会话看的实时画面，<b>与 pi 运行时彻底解耦</b>（不依赖也不启动任何代理）。</p>
+<details><summary>看代码区折叠</summary><pre>
+class ChildSessionTailer { constructor: seenCount=已存在消息数 → 首 poll 不重放历史 }
+sessionEntriesToMessages(file)  // 只提取 message 条目
+GET /api/subagents/[id]/events  // tail 文件 → child_update / child_terminal
+</pre></details>
+</div>
+
+<div class="card">
+<b>③ 红线防护：子会话绝不启动/接管</b> — <code>lib/session-reader.ts</code> + <code>app/api/agent/[id]</code>（POST）与 <code>events</code>
+<p>所有「能启动/接管代理」的共享入口，在真正启动前先判断目标是不是子会话：是则直接 <b>403 拒绝</b>。这样即使前端某个入口漏了，或有人直接 curl，也不可能为子会话拉起一个 agent 进程。</p>
+<details><summary>看代码区折叠</summary><pre>
+POST /api/agent/[id]  →  resolvePath → isChildSessionPath? → 403(禁止命令)
+GET  /api/agent/[id]/events → isChildSessionPath? → 403(禁止交互通道)
+（两处都放在 isAlive() 快路径之前，防泄漏 wrapper 也被兜住）
+</pre></details>
+</div>
+
+<div class="card">
+<b>④ 前端：选中子会话走只读、隐藏输入</b> — <code>hooks/useAgentSession.ts</code> + <code>components/ChatWindow.tsx</code>
+<p>选中子会话时不再连普通交互事件通道，改连只读尾读 SSE；所有「发送/中止/分叉/导航/换模型/压缩」等命令处理都在只读子会话下直接忽略；<code>ChatWindow</code> 显示「👁 只读查看子代理」横幅、没有输入框。</p>
+<details><summary>看代码区折叠</summary><pre>
+connectChildEvents(sid)         // 尾读 SSE；child_terminal 时关闭连接防泄漏
+handleSend/Abort/Fork/Steer/Navigate/LeafChange/ModelChange/Compact/... 均加 browseOnly 早退
+ChatWindow: browseOnly → 只读横幅，不渲染 ChatInput
+</pre></details>
+</div>
+
+<div class="card">
+<b>类型</b> — <code>lib/types.ts</code>
+<p><code>SessionInfo</code> 增可选 <code>browseOnly?: boolean</code>，前端据此走只读分支。</p>
+</div>
+
+<h2>怎么测（手动验收，不读代码）</h2>
+<div class="howto">
+<p><b>准备：</b>启动 web（<code>npm run dev</code>，端口 3030）。需要一个能派子代理的主会话（你的 pi 装了 pi-subagents）。</p>
+<ol>
+<li>在 web 开一个主会话，让它调用 <code>subagent</code> 工具跑一个任务。</li>
+<li>运行中子代理 1–2 秒内：<b>侧栏主会话下冒出子节点，前面有个转圈</b>。</li>
+<li>点开那个子会话：主区显示「专只读查看子代理」横幅，<b>没有输入框</b>；子代理的思路/工具调用<b>随跑随出现在面板里</b>。</li>
+<li>子代理完成后：转圈变绿（成功）或红（出错），实时跟随停止。</li>
+<li>安全兜底（可选）：对这个子会话 id 直接 <code>curl -X POST /api/agent/&lt;childId&gt;</code>，应返回 <b>403</b>，证明它永不被当作可交互会话。</li>
+</ol>
+</div>
+
+<h2>没动什么 / 风险边界</h2>
+<ul>
+<li class="risklbl">没动 pi 运行时 / pi-subagents：子代理仍由 pi 自己的独立进程跑，本改动只在 web 侧「只读旁观」。</li>
+<li>不做全局子代理列表、不做发起 subagent、不做工作区隔离（本次范围=当前父会话的子会话可见+只读查看）。</li>
+<li>不改普通可交互会话的事件通道（<code>/api/agent/[id]</code> 与既有行为保持）。</li>
+</ul>
+
+<h2>验证事实</h2>
+<ul>
+<li class="ok">单元测试：新增 2 个测试文件，全绿（子会话递归发现、只读尾读、红线识别、不做任何 rpc 引用）。全量 <code>npm test</code> = 96 全过。</li>
+<li class="ok">类型/静态：<code>tsc --noEmit</code> 干净；本次改动文件 <code>eslint</code> 0 error。</li>
+<li class="ok">独立 reviewer 三轮：终轮 PASS，红线（绝不启动子会话代理）确认闭合。</li>
+<li>页面 HTTP 断言：子会话入列 browseOnly=true；对子会话 POST /api/agent 与 /events 均 403；/api/subagents/[id]/events 只读尾读可用且不重放历史。证据见 <code>.web-verify/reports/subagent-browse-2026-08-19/report.md</code>（PASS 4 / BLOCKED 1）。</li>
+<li class="risklbl">浏览器 UI 快照（侧栏子节点+只读横幅）在本环境 <b>BLOCKED</b>：harness 浏览器能力策略锁不可用（环境问题，与代码无关）。请按上方「怎么测」手动确认该 UI。</li>
+<li class="risklbl">已知小边界：从「会话已加载历史」到「只读通道接通」之间子代理新增的极少数消息可能漏（亚秒级窗口，可重拉恢复），已注释记录。</li>
+</ul>
+
+</div>
+</body>
+</html>

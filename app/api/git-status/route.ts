@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
+import os from "os";
+import path from "path";
 
 export const dynamic = "force-dynamic";
 
@@ -232,36 +234,51 @@ export async function POST(req: Request) {
       if (!filePath) {
         return NextResponse.json({ error: "filePath required" }, { status: 400 });
       }
+      // 产物路径可能是绝对路径,git show/readFileSync 需要相对 cwd(git 根) 的路径;
+      // 已是相对路径(如 GitPanel 传的 f.file)则保持原样。win32 的 relative 会出反斜杠,
+      // git 里反斜杠是转义符,需统一转成 /。匹配单个反斜杠,源码写作 /\\/g。
+      const relPath = (path.isAbsolute(filePath) ? path.relative(cwd, filePath) : filePath).replace(/\\/g, "/");
       try {
-        const isBinary = filePath.endsWith(".png") || filePath.endsWith(".jpg") || filePath.endsWith(".jpeg") || filePath.endsWith(".gif") || filePath.endsWith(".webp") || filePath.endsWith(".ico") || filePath.endsWith(".mp3") || filePath.endsWith(".wav");
+        const isBinary = relPath.endsWith(".png") || relPath.endsWith(".jpg") || relPath.endsWith(".jpeg") || relPath.endsWith(".gif") || relPath.endsWith(".webp") || relPath.endsWith(".ico") || relPath.endsWith(".mp3") || relPath.endsWith(".wav");
         if (isBinary) {
-          return NextResponse.json({ oldContent: "二进制文件无法预览 Diff\n(Binary file changes cannot be compared textually)", newContent: "二进制文件无法预览 Diff\n(Binary file)", filePath });
+          return NextResponse.json({ oldContent: "二进制文件无法预览 Diff\n(Binary file changes cannot be compared textually)", newContent: "二进制文件无法预览 Diff\n(Binary file)", filePath: relPath });
         }
 
         let oldContent = "";
         let newContent = "";
+        // 当前文件能否在磁盘读到(仅对“工作区当前改动”分支有意义):前端据此区分
+        // “文件已不在”与“空 diff”,避免删了的产物打开只剩空白面板。
+        let fileExists = false;
 
         if (commitHash) {
           // DIFF OF A SPECIFIC HISTORICAL COMMIT (commitHash vs compile parentHash)
           try {
-            oldContent = execSync(`git -c core.quotePath=false show ${commitHash}~1:"${filePath}"`, { cwd, encoding: "utf8" });
+            oldContent = execSync(`git -c core.quotePath=false show ${commitHash}~1:"${relPath}"`, { cwd, encoding: "utf8" });
           } catch {
             // Might be first commit, older state doesn't exist
           }
           try {
-            newContent = execSync(`git -c core.quotePath=false show ${commitHash}:"${filePath}"`, { cwd, encoding: "utf8" });
+            newContent = execSync(`git -c core.quotePath=false show ${commitHash}:"${relPath}"`, { cwd, encoding: "utf8" });
+            fileExists = true;
           } catch {}
         } else {
           // DIFF OF CURRENT LOCAL CHANGES
           try {
-            oldContent = execSync(`git -c core.quotePath=false show HEAD:"${filePath}"`, { cwd, encoding: "utf8" });
+            oldContent = execSync(`git -c core.quotePath=false show HEAD:"${relPath}"`, { cwd, encoding: "utf8" });
           } catch {}
+          // 产物路径可能是 `~` 家目录缩写(pi 插件安装常写 ~/.pi/...);若直接 path.join(cwd,"~/...")
+          // 会拼出 C:\<cwd>\~\... 假路径必定失败,须先展开为真实家目录。
+          const home = os.homedir();
+          const absReadPath = relPath === "~" || relPath.startsWith("~/") ? path.join(home, relPath.slice(1)) : path.join(cwd, relPath);
           try {
-            newContent = readFileSync(`${cwd}/${filePath}`, "utf8");
-          } catch {}
+            newContent = readFileSync(absReadPath, "utf8");
+            fileExists = true;
+          } catch {
+            // 文件已不在磁盘(被删除/改名):fileExists 留给前端提示,而非空白 diff。
+          }
         }
 
-        return NextResponse.json({ oldContent, newContent, filePath });
+        return NextResponse.json({ oldContent, newContent, filePath: relPath, exists: fileExists });
       } catch (err: any) {
         return NextResponse.json({ error: "Diff fetch failed", details: err?.message }, { status: 500 });
       }

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-web 第一批修复 · 改动理解（2026-08-18）</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f8fa; --border: #d0d7de;
+    --text: #1f2328; --muted: #57606a; --accent: #0969da;
+    --danger-bg: #ffebe9; --danger-border: #ff818266; --danger: #cf222e;
+    --warn-bg: #fff8c5; --warn-border: #d4a72c66; --warn: #9a6700;
+    --ok-bg: #dafbe1; --ok: #1a7f37;
+  }
+  html.dark {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --danger-bg: #2d1516; --danger-border: #da363355; --danger: #ff7b72;
+    --warn-bg: #2d2715; --warn-border: #d4a72c66; --warn: #d29922;
+    --ok-bg: #12261b; --ok: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15px; margin: 20px 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .risk-banner { background: var(--danger-bg); border: 1px solid var(--danger-border);
+    border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+  .risk-banner b { color: var(--danger); }
+  .card { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; margin: 10px 0; }
+  .ok { background: var(--ok-bg); border: 1px solid var(--ok); border-radius: 8px; padding: 10px 14px; margin: 10px 0; }
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; padding: 10px 14px; margin: 10px 0; }
+  code, .path { font-family: "Cascadia Code", Consolas, monospace; font-size: 13px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .path { display: inline-block; margin: 1px 0; }
+  ul { margin: 6px 0 6px 20px; padding: 0; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); }
+  details { margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; }
+  summary { cursor: pointer; padding: 10px 14px; font-weight: 600; background: var(--panel); }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .inner { padding: 12px 16px; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px;
+    margin-right: 6px; font-weight: 600; }
+  .tag.sev { background: var(--danger-bg); color: var(--danger); }
+  .tag.file { background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+  .arrow { color: var(--muted); margin: 0 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>pi-web 第一批修复 · 改动理解</h1>
+<div class="sub">Deep 档 · 2026-08-18 · 对应审计：P0 安全止血（CSRF 门禁 + 命令注入）+ 状态机正确性（S2/S3）</div>
+
+<div class="risk-banner">
+  <b>为什么这批最先修：</b>当前 dev server 监听 <code>0.0.0.0:3030</code>（局域网可达）、全 API 零鉴权、<code>git-status</code> 等多处可被跨站请求直接触发命令注入——"任意网页 → 本机任意代码执行"的通道是真实存在的。本批修复先把这条总通道堵死，再修会话状态机的两个隐患。修复过程不改变任何 UI 观感，属于"看不见的安全加固"。
+</div>
+
+<h2>1. 一句话</h2>
+<div class="card">
+给全部 <code>/api/**</code> 加服务端强制的前置校验（无 middleware 的仓库新建一个），把 <code>git-status</code> / <code>open-terminal</code> 的 shell 字符串拼接改成安全的数组参数，并修掉 <code>useAgentSession</code> 里"加载 effect 空依赖"和"自动重试跨会话污染"两个状态机隐患。
+</div>
+
+<h2>2. 改动地图（改哪里）</h2>
+
+<h3>主改 1：新建 <span class="path">middleware.ts</span>（仓库根目录 / 或 <span class="path">src/middleware.ts</span>，取决于构建入口）</h3>
+<div class="card">
+<span class="tag sev">安全</span><span class="tag file">新建文件</span>
+<ul>
+  <li><b>做什么：</b>对 <code>/api/:path*</code> 统一校验 <code>Host</code>（仅允许 <code>localhost</code> / <code>127.0.0.1</code> / <code>[::1]</code> / 已配置的 <code>allowedDevOrigins</code>），并在写操作（POST/PUT/PATCH/DELETE）校验 <code>Origin</code> 白名单或 <code>Sec-Fetch-Site</code> ∈ <code>{same-origin, none}</code>。</li>
+  <li><b>为什么：</b>Host 校验挡住 DNS rebinding（攻击域名解析到 127.0.0.1 的跨源读取，含明文 API key）；Origin/Sec-Fetch-Site 校验挡住跨站 simple-request CSRF。这是堵"任意网页 → 本机 API"总通道的单一落点，<b>零前端改动</b>——前端 49 处 fetch 全部自动被保护。</li>
+  <li><b>注意：</b>不要用"允许所有 Origin + CORS 头"的方式（那会打开跨源读取）；只校验、不放行跨源。</li>
+</ul>
+</div>
+
+<h3>主改 2：<span class="path">app/api/git-status/route.ts</span> · 消灭 shell 拼接</h3>
+<div class="card">
+<span class="tag sev">安全</span><span class="tag file">修改现有文件</span>
+<ul>
+  <li><b>现状（已逐行核实）：</b><code>execSync(`git checkout ${branchName}`)</code> 等 10 处把用户输入直接拼进 shell 命令串（L121/134/156/171/173/222/223/247/252/257/276/294/307），<code>execSync</code> 默认经 <code>sh -c</code> 执行，<code>; / &amp;&amp; / $() / `</code> 均可注入。</li>
+  <li><b>改成：</b>使用 <code>execFile</code>（或 <code>spawn</code>）数组参数：<code>execFile("git", ["checkout", branchName], {cwd, encoding:"utf8"})</code>。数组参数不经 shell，<b>无注入面</b>；行为（错误信息、exit code）保持兼容。</li>
+  <li><b>顺带修：</b>L316 的 <code>write-file</code> 分支二次 <code>req.json()</code>（body 已被 L9 消费，可能恒 500）→ 复用已解析 body；<code>writePath</code> 的 <code>..</code> 穿越 → realpath containment（限定在 <code>cwd</code> 内，另限制 content ≤ ~5MB）。</li>
+  <li><b>兼容性：</b>所有 action（status/list-branches/checkout/merge/commit/rollback/push/pull/fetch/resolve-conflict/diff/commit-files/delete-branch/create-branch/write-file）返回的 JSON 结构不变，前端 <code>GitPanel.tsx</code> 无需改动。</li>
+</ul>
+</div>
+
+<h3>主改 3：<span class="path">app/api/open-terminal/route.ts</span> · pwsh 兜底分支去 shell</h3>
+<div class="card">
+<span class="tag sev">安全</span><span class="tag file">修改现有文件</span>
+<ul>
+  <li><b>现状：</b>Windows 兜底分支（L46-54）<code>spawn("pwsh", ["-NoExit","-Command", `Set-Location -LiteralPath '${path}'`], {shell:true})</code>——<code>path</code> 含 <code>'</code> 即逃逸出单引号字面量，且 <code>shell:true</code> 在 Windows 走 cmd 可二次注入 <code>&amp;</code>/<code>|</code>。</li>
+  <li><b>改成：</b>去掉 <code>shell:true</code> 和字符串命令，改用 <code>spawn("pwsh", ["-NoExit","-WorkingDirectory", path], {detached:true, stdio:"ignore"})</code>（pwsh 支持 <code>-WorkingDirectory</code>，原生数组参数）。macOS 的 <code>open -a Terminal path</code> 与 Linux 分支本来就是数组参数，保持不动。</li>
+  <li><b>可选加严：</b>对 <code>path</code> 加目录存在性 + isDirectory 校验（已有），或与 /api/files 白名单收敛（第二批评级做）。</li>
+</ul>
+</div>
+
+<h3>主改 4：<span class="path">hooks/useAgentSession.ts</span> · S2 加载 effect 空依赖</h3>
+<div class="card">
+<span class="tag file">修改现有文件</span>
+<ul>
+  <li><b>现状（L1294-1327）：</b>effect 依赖 <code>[]</code> + eslint-disable，注释写"Load session when session changes"但实际<b>只在挂载时跑一次</b>；切换会话靠 <code>AppShell.tsx:401</code> 的 <code>key={sessionKey}</code> 整个重挂载兜底——隐性契约。</li>
+  <li><b>改成：</b>把 effect 改为依赖 <code>[session?.id]</code>（<code>loadSession</code> 本身引用稳定），先判断 <code>if (!session) return;</code>，让"切换会话即加载"行为自洽，不再依赖外部重挂载；删除误导注释，保留卸载清理（关 EventSource + 清 timer）。注意 <code>connectEvents</code>/<code>loadTools</code> 等引用进依赖或改用 ref，避免闭包过期。</li>
+</ul>
+</div>
+
+<h3>主改 5：<span class="path">hooks/useAgentSession.ts</span> · S3 自动重试跨会话污染</h3>
+<div class="card">
+<span class="tag file">修改现有文件</span>
+<ul>
+  <li><b>现状（L651-663）：</b><code>message_end</code> 检测到 provider 错误后 <code>setTimeout(..., 1000)</code> 发送"继续"；若用户在 1 秒窗口内切换了会话，这条重试会发到<b>新会话</b>。</li>
+  <li><b>改成：</b>setTimeout 前捕获 <code>sessionIdRef.current</code>，回调里先比对"仍是同一个会话"才发送；timer 句柄存入 ref，在会话切换/卸载时 <code>clearTimeout</code>。</li>
+</ul>
+</div>
+
+<h3>可能波及（本批不主动动，但需验证不回归）</h3>
+<div class="card">
+<ul>
+  <li><code>lib/agent-client.ts</code> 及前端各 fetch 调用点：middleware 生效后所有 <code>/api/**</code> 请求都会过校验，需手动验证本机正常链路（localhost Origin/Host 天然通过）不误伤；跨 192.168.* 局域网访问（allowedDevOrigins 已配置）需要验证 Host 白名单覆盖。</li>
+  <li><code>app/api/sessions/[id]/events</code> 与 <code>app/api/agent/[id]/events</code>（SSE）：EventSource 是 GET，无 Origin 携带自定义头（浏览器 EventSource 无法加头），middleware 需对 GET 只做 Host 校验（SSE 不该被 Origin 挡掉——但跨站 EventSource 会带 Origin，正好被 <code>Sec-Fetch-Site: cross-site</code> 拒绝，行为正确）。</li>
+  <li>Tauri/桌面壳访问（若经自定义 scheme 或 127.0.0.1）：Origin 可能为 <code>null</code>，middleware 需对 <code>null</code> Origin + 可信 Referer 的组合放行，否则桌面端可能被误拦——本批把放行条件写清楚，回归验证时重点测。</li>
+</ul>
+</div>
+
+<h2>3. 逻辑链路（为什么这样串）</h2>
+<div class="card">
+<div class="sub" style="margin-top:0">攻击路径 → 修复后的拦截点</div>
+<table>
+<tr><th>当前漏洞路径</th><th>修复落点</th></tr>
+<tr><td>恶意网页 → <code>fetch(http://localhost:3030/api/git-status, {method:POST, body:text/plain})</code> → <code>req.json()</code> 解析 → <code>execSync("git " + 注入串)</code> → RCE</td><td>middleware 拒 <code>Origin/Sec-Fetch-Site: cross-site</code> → 第一步即断；即使放行，<code>execFile</code> 数组参数无 shell 可注</td></tr>
+<tr><td>攻击域 DNS → 127.0.0.1（rebinding）→ 同源读 <code>/api/models-config</code>（明文 API key）</td><td>middleware 校验 <code>Host</code> 白名单（攻击域不匹配）→ 断</td></tr>
+<tr><td>恶意网页 → <code>fetch(http://localhost:3030/api/open-terminal)</code> → <code>path</code> 注入 pwsh</td><td>middleware 拦截 + <code>-WorkingDirectory</code> 数组参数无注入面</td></tr>
+<tr><td>用户切会话 1 秒内 → 旧错误触发的"继续"发到新会话 → 上下文污染/误建新会话</td><td>S3：捕获 sessionId + 回调比对 + timer 清理</td></tr>
+<tr><td>切会话 → 新会话不加载（依赖 AppShell key 重挂载的隐性契约）</td><td>S2：effect 补 <code>[session?.id]</code> 依赖，行为自洽</td></tr>
+</table>
+<div class="ok"><b>修复后应看到：</b>本机正常使用零感知；打开浏览器 DevTools 无新增报错；更换会话后消息立即重新加载（不再依赖重挂载）；跨站模拟请求（可用 curl 带 <code>Origin: https://evil.example</code>）被 403。</div>
+</div>
+
+<h2>4. 改完你应看到（验收观感）</h2>
+<div class="card">
+<ul>
+  <li><code>npm run dev</code> 后本机聊天 / Git 面板 / 文件浏览 / 终端 / 模型配置全部照常工作（回归无感知）。</li>
+  <li><code>curl -X POST http://localhost:3030/api/git-status -H "Origin: https://evil.example" -d '{"cwd":"C:\\","action":"status"}'</code> → 返回 403（此前会执行）。</li>
+  <li>用 <code>curl</code> 伪造 <code>Host: evil.example</code> 请求 <code>/api/models-config</code> → 403（此前返回含明文 key 的 JSON）。</li>
+  <li>Git 面板：含特殊字符（<code>$()</code>、<code>;</code>、中文、空格）的分支名/提交信息/路径不再被 shell 解析破坏，正常提交/切换/回滚。</li>
+  <li><code>tsc --noEmit</code> 0 错误；<code>npm test</code> 全绿（utils 新测试 + 现有 62 个不回归）。</li>
+  <li>快速切换两个会话（在 provider 错误自动重试的 1 秒窗口内切换），确认重试不会出现在新会话。</li>
+</ul>
+</div>
+
+<h2>5. 先别动（明确不做）</h2>
+<div class="card">
+<ul>
+  <li>不做 <code>safe-edit</code> / <code>hashline</code> / <code>skills</code> PATCH 的文件写白名单收敛（第二批评级，涉及 realpath containment 与复用 /api/files 白名单，需要更大改动面）。</li>
+  <li>不修 <code>AgentSessionWrapper.destroy()</code> 孤儿 agent / 双活实例（第二批评级）。</li>
+  <li>不拆大组件、不动 UI、不加虚拟化、不换 PrismLight（后续批次）。</li>
+  <li>不新增前端自定义请求头（middleware 服务端强制已足够，<b>等发现浏览器端其他通道再补</b>；EventSource 本就无法加头，服务端方案是唯一正确做法）。</li>
+  <li>不调整 <code>allowedDevOrigins</code> / 不改变 3030 监听行为（那是部署决策，除非用户另行要求）。</li>
+</ul>
+</div>
+
+<h2>6. 未知与假设</h2>
+<div class="card">
+<ul>
+  <li><b>material 完整度：高。</b>三份审计报告（<code>debug/audit-backend.md</code> / <code>audit-frontend.md</code> / <code>audit-tests.md</code>）+ 本 Grounding 逐行核实了所有主改落点。</li>
+  <li><b>假设 1：</b>middleware 在 Next 16（App Router）下按标准 <code>export default function middleware()</code> 生效，<code>matcher</code> 限定 <code>/api/:path*</code>。若本项目构建入口特殊（需确认 <code>next.config.ts</code> 无干扰），以实测为准。</li>
+  <li><b>假设 2：</b>桌面壳（Tauri）经 http 访问本机服务时 Origin 为 <code>null</code> 或应用内 scheme——middleware 对 GET + Host 白名单 + <code>Origin: null</code> 组合放行，避免误拦；若桌面端用自定义 Host（非 localhost），需在配置的 dev origins 中放行（待用户确认是否需要在白名单里加桌面壳来源）。</li>
+  <li><b>待验证：</b><code>write-file</code> action 当前是否真被前端使用（GitPanel 只有 diff 触发，未发现 write-file 调用点）——若无人使用可降级为顺手修或直接收紧，不影响主链路。</li>
+  <li><b>边界：</b><code>Sec-Fetch-Site: none</code>（地址栏直开/书签）应放行；<code>same-origin</code> 放行；<code>cross-site</code> 拒绝——该规则对老浏览器（无 Sec-Fetch 头）退化为仅凭 Origin/Host 判断。</li>
+</ul>
+</div>
+
+</div>
+</body>
+</html>

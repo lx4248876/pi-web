@@ -41,6 +41,25 @@ interface BrowseDirResponse extends BrowseValidationResponse {
 	requestedPath?: string;
 }
 
+function copyText(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) {
+        return navigator.clipboard.writeText(text);
+    }
+    try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        return Promise.resolve();
+    } catch {
+        return Promise.reject();
+    }
+}
+
 function formatRelativeTime(dateStr: string): string {
 	const date = new Date(dateStr);
 	const now = new Date();
@@ -317,6 +336,7 @@ export function SessionSidebar({
 	});
 	const [dragCwd, setDragCwd] = useState<string | null>(null);
 	const [dropTargetCwd, setDropTargetCwd] = useState<string | null>(null);
+	const [hoverProjectCwd, setHoverProjectCwd] = useState<string | null>(null);
 	const [homeDir, setHomeDir] = useState<string>("");
 	const [browseOpen, setBrowseOpen] = useState(false);
 	const [browsePath, setBrowsePath] = useState<string | null>(null);
@@ -404,6 +424,95 @@ export function SessionSidebar({
 			body: JSON.stringify({ hiddenCwds: next }),
 		}).catch(() => {});
 	}, []);
+
+	// 回收站：被「删除」的会话 id 集合。删除后主列表过滤、归档列表展示并支持还原。
+	// 持久化机制与 hiddenCwds 一致(服务端 /api/ui-state + localStorage 兜底)。
+	const [trashedIds, setTrashedIds] = useState<Set<string>>(() => {
+		if (typeof window !== "undefined") {
+			try {
+				const stored = localStorage.getItem("pi-trashed-sessions");
+				if (stored) {
+					const arr = JSON.parse(stored);
+					if (Array.isArray(arr))
+						return new Set(arr.filter((s): s is string => typeof s === "string"));
+				}
+			} catch {}
+		}
+		return new Set();
+	});
+
+	const persistTrashedIds = useCallback((ids: Set<string>) => {
+		const arr = [...ids];
+		try {
+			localStorage.setItem("pi-trashed-sessions", JSON.stringify(arr));
+		} catch {}
+		fetch("/api/ui-state", {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ trashedSessions: arr }),
+		}).catch(() => {});
+	}, []);
+
+	// 服务端版本就位后把本地兜底合入(并集)，与 hiddenCwds 的行为对齐。
+	useEffect(() => {
+		let cancelled = false;
+		fetch("/api/ui-state")
+			.then((r) => (r.ok ? r.json() : null))
+			.then((state: { trashedSessions?: string[] } | null) => {
+				if (cancelled || !state) return;
+				const server = Array.isArray(state.trashedSessions)
+					? state.trashedSessions
+					: [];
+				setTrashedIds((local) => {
+					const merged = new Set<string>(server);
+					let changed = false;
+					for (const id of local) {
+						if (!merged.has(id)) {
+							merged.add(id);
+							changed = true;
+						}
+					}
+					if (changed) persistTrashedIds(merged);
+					return merged;
+				});
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [persistTrashedIds]);
+
+	const trashSession = useCallback(
+		(id: string) => {
+			setTrashedIds((prev) => {
+				if (prev.has(id)) return prev;
+				const next = new Set(prev);
+				next.add(id);
+				persistTrashedIds(next);
+				return next;
+			});
+		},
+		[persistTrashedIds],
+	);
+
+	const restoreSession = useCallback(
+		(id: string) => {
+			setTrashedIds((prev) => {
+				if (!prev.has(id)) return prev;
+				const next = new Set(prev);
+				next.delete(id);
+				persistTrashedIds(next);
+				return next;
+			});
+		},
+		[persistTrashedIds],
+	);
+
+	// 主列表展示用的会话：剔除已删除(回收站)的，树构建只消费这些。
+	const visibleSessions = useMemo(
+		() => allSessions.filter((s) => !trashedIds.has(s.id)),
+		[allSessions, trashedIds],
+	);
 
 	// 归档面板(聚焦弹出,展示所有被关闭项目下的归档会话)开关
 	const [archivedOpen, setArchivedOpen] = useState(false);
@@ -849,7 +958,7 @@ export function SessionSidebar({
 		);
 		return recentCwdOptions
 			.map(({ cwd }) => {
-				const sessionsForCwd = allSessions.filter((s) => s.cwd === cwd);
+				const sessionsForCwd = visibleSessions.filter((s) => s.cwd === cwd);
 				const tree = buildSessionTree(sessionsForCwd);
 				return { cwd, tree };
 			})
@@ -861,7 +970,7 @@ export function SessionSidebar({
 						p.cwd === selectedCwd ||
 						persistentCwds.has(p.cwd)),
 			);
-	}, [recentCwdOptions, allSessions, selectedCwd, selectedCwdProp, hiddenCwds]);
+	}, [recentCwdOptions, visibleSessions, selectedCwd, selectedCwdProp, hiddenCwds]);
 
 	const persistProjectOrder = useCallback((next: string[]) => {
 		try {
@@ -958,7 +1067,7 @@ export function SessionSidebar({
 			<div
 				data-sidebar-header=""
 				style={{
-					padding: "12px 10px 10px",
+					padding: "10px 10px 8px",
 					borderBottom: "1px solid var(--border)",
 					flexShrink: 0,
 				}}
@@ -968,11 +1077,11 @@ export function SessionSidebar({
 						display: "flex",
 						alignItems: "center",
 						justifyContent: "space-between",
-						marginBottom: 10,
+						marginBottom: 6,
 					}}
 				>
 					<PiAgentTitle />
-					<div style={{ display: "flex", gap: 6 }}>
+					<div style={{ display: "flex", gap: 4 }}>
 						{/* 归档会话按钮:聚焦弹出所有被关闭项目下的会话,点单个会话还原 */}
 						<button
 							onClick={() => setArchivedOpen(true)}
@@ -987,17 +1096,17 @@ export function SessionSidebar({
 								border: `1px solid ${archivedOpen ? "rgba(37,99,235,0.4)" : "var(--border)"}`,
 								color: archivedOpen ? "var(--accent)" : "var(--text-muted)",
 								cursor: "pointer",
-								width: 32,
-								height: 32,
-								borderRadius: 7,
+								width: 26,
+								height: 26,
+								borderRadius: 6,
 								padding: 0,
 								flexShrink: 0,
 								transition: "background 0.3s, color 0.3s, border-color 0.3s",
 							}}
 						>
 							<svg
-								width="15"
-								height="15"
+								width="13"
+								height="13"
 								viewBox="0 0 24 24"
 								fill="none"
 								stroke="currentColor"
@@ -1023,9 +1132,9 @@ export function SessionSidebar({
 								border: `1px solid ${sessionRefreshDone ? "rgba(74,222,128,0.4)" : "var(--border)"}`,
 								color: sessionRefreshDone ? "#4ade80" : "var(--text-muted)",
 								cursor: "pointer",
-								width: 32,
-								height: 32,
-								borderRadius: 7,
+								width: 26,
+								height: 26,
+								borderRadius: 6,
 								padding: 0,
 								flexShrink: 0,
 								transition: "background 0.3s, color 0.3s, border-color 0.3s",
@@ -1034,8 +1143,8 @@ export function SessionSidebar({
 						>
 							{sessionRefreshDone ? (
 								<svg
-									width="15"
-									height="15"
+									width="13"
+									height="13"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="#4ade80"
@@ -1047,8 +1156,8 @@ export function SessionSidebar({
 								</svg>
 							) : (
 								<svg
-									width="15"
-									height="15"
+									width="13"
+									height="13"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="currentColor"
@@ -1065,7 +1174,7 @@ export function SessionSidebar({
 				</div>
 
 				{/* Minimalist Add Project Trigger */}
-				<div style={{ marginTop: 8 }}>
+				<div style={{ marginTop: 6 }}>
 					<button
 						onClick={() => handleBrowseFolder()}
 						style={{
@@ -1073,8 +1182,8 @@ export function SessionSidebar({
 							display: "flex",
 							alignItems: "center",
 							justifyContent: "center",
-							gap: 5,
-							padding: "6px 10px",
+							gap: 4,
+							padding: "4px 8px",
 							background: "var(--bg-hover)",
 							border: "1px solid var(--border)",
 							borderRadius: 7,
@@ -1094,8 +1203,8 @@ export function SessionSidebar({
 						}}
 					>
 						<svg
-							width="10"
-							height="10"
+							width="9"
+							height="9"
 							viewBox="0 0 24 24"
 							fill="none"
 							stroke="currentColor"
@@ -1871,10 +1980,12 @@ export function SessionSidebar({
 									transition: "background 0.12s",
 								}}
 								onMouseEnter={(e) => {
+									setHoverProjectCwd(cwd);
 									if (!isActiveProject)
 										e.currentTarget.style.background = "var(--bg-hover)";
 								}}
 								onMouseLeave={(e) => {
+									setHoverProjectCwd(null);
 									if (!isActiveProject)
 										e.currentTarget.style.background = "transparent";
 								}}
@@ -1936,13 +2047,16 @@ export function SessionSidebar({
 									</span>
 								</div>
 
-								{/* Row actions: drag handle + new session + hide workspace */}
+								{/* Row actions: drag handle + new session + hide workspace (shown on row hover) */}
 								<div
 									style={{
 										display: "flex",
 										alignItems: "center",
 										gap: 2,
 										flexShrink: 0,
+										opacity: hoverProjectCwd === cwd ? 1 : 0,
+										pointerEvents: hoverProjectCwd === cwd ? "auto" : "none",
+										transition: "opacity 0.12s",
 									}}
 								>
 									<span
@@ -2098,6 +2212,7 @@ export function SessionSidebar({
 												onRenamed={loadSessions}
 												onSessionDeleted={(id, cwd) => {
 													onSessionDeleted?.(id, cwd);
+													trashSession(id);
 													loadSessions().then(() => {
 														// 删除会话后，如果该项目的最后一个会话也被删了，
 														// 仍应保留项目在工作区列表中，而不是随会话一起消失。
@@ -2544,8 +2659,9 @@ export function SessionSidebar({
 									(c) => !!hiddenCwds[c] && c.trim().length > 0,
 								);
 								const hiddenSet = new Set(hiddenList);
+								// 归档 = 被关闭项目的会话 ∪ 回收站里已删除的会话
 								const archived = allSessions
-									.filter((s) => hiddenSet.has(s.cwd))
+									.filter((s) => hiddenSet.has(s.cwd) || trashedIds.has(s.id))
 									.sort((a, b) => b.modified.localeCompare(a.modified));
 								if (archived.length === 0) {
 									return (
@@ -2561,106 +2677,31 @@ export function SessionSidebar({
 										</div>
 									);
 								}
-								return archived.map((s) => {
-									const stitle =
-										s.name ||
-										s.firstMessage.slice(0, 50) ||
-										s.id.slice(0, 12);
-									return (
-										<button
-											key={s.id}
-											onClick={() => {
+								return archived.map((s) => (
+									<ArchivedSessionRow
+										key={s.id}
+										session={s}
+										homeDir={homeDir}
+										onRestore={() => {
+											// 回收站会话：从回收站还原(回原项目)；被关闭项目的会话：还原项目。
+											if (trashedIds.has(s.id)) {
+												restoreSession(s.id);
+											} else {
 												rememberCwd(s.cwd);
-												markSessionSeen(s.id);
-												onSelectSession(s);
-												setArchivedOpen(false);
-												loadSessions();
-											}}
-											style={{
-												display: "flex",
-												alignItems: "center",
-												gap: 8,
-												width: "100%",
-												padding: "8px 10px",
-												border: "none",
-												borderRadius: 6,
-												background: "none",
-												textAlign: "left",
-												cursor: "pointer",
-												transition: "background 0.12s",
-											}}
-											onMouseEnter={(e) =>
-												(e.currentTarget.style.background =
-													"var(--bg-selected)")
 											}
-											onMouseLeave={(e) =>
-												(e.currentTarget.style.background = "none")
-											}
-										>
-											<svg
-												width="12"
-												height="12"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="var(--accent)"
-												strokeWidth="2"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												style={{ flexShrink: 0 }}
-											>
-												<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-												<polyline points="7 10 12 15 17 10" />
-												<line x1="12" y1="15" x2="12" y2="3" />
-											</svg>
-											<div style={{ flex: 1, minWidth: 0 }}>
-												<div
-													style={{
-														fontSize: 10,
-														color: "var(--text-dim)",
-														overflow: "hidden",
-														textOverflow: "ellipsis",
-														whiteSpace: "nowrap",
-														marginBottom: 2,
-													}}
-													title={s.cwd}
-												>
-													{shortenCwd(s.cwd, homeDir)}
-												</div>
-												<div
-													style={{
-														fontSize: 12,
-														fontWeight: 500,
-														color: "var(--text)",
-														overflow: "hidden",
-														textOverflow: "ellipsis",
-														whiteSpace: "nowrap",
-													}}
-													title={stitle}
-												>
-													{stitle}
-												</div>
-												<div
-													style={{
-														fontSize: 11,
-														color: "var(--text-dim)",
-													}}
-												>
-													{formatRelativeTime(s.modified)} · {s.messageCount} msgs
-												</div>
-											</div>
-											<span
-												style={{
-													fontSize: 11,
-													fontWeight: 600,
-													color: "var(--accent)",
-													flexShrink: 0,
-												}}
-											>
-												还原
-											</span>
-										</button>
-									);
-								})
+											markSessionSeen(s.id);
+											onSelectSession(s);
+											setArchivedOpen(false);
+											loadSessions();
+										}}
+										onRemoved={() => {
+											// 彻底删除后：清掉回收站记录(若在)，若正查看该书签由上层关闭，再刷新列表。
+											restoreSession(s.id);
+											onSessionDeleted?.(s.id, s.cwd);
+											loadSessions();
+										}}
+									/>
+								))
 								}
 								)
 								()
@@ -2668,6 +2709,256 @@ export function SessionSidebar({
 						</div>
 					</div>
 				</div>
+			)}
+		</div>
+	);
+}
+
+// 归档列表里的单行：点击还原会话；右侧“彻底删除”会把 .jsonl 从磁盘永久移除(不可还原)。
+// 之所以单独成组件：每行需要自己的确认态(confirming/deleting)，缩在 IIFE 里不便维护。
+function ArchivedSessionRow({
+	session,
+	homeDir,
+	onRestore,
+	onRemoved,
+}: {
+	session: SessionInfo;
+	homeDir?: string;
+	onRestore: () => void;
+	onRemoved: () => void;
+}) {
+	const stitle =
+		session.name ||
+		session.firstMessage.slice(0, 50) ||
+		session.id.slice(0, 12);
+	const [confirming, setConfirming] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+
+	const confirmDelete = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+		setDeleting(true);
+		try {
+			await fetch(`/api/sessions/${encodeURIComponent(session.id)}?permanent=1`, {
+				method: "DELETE",
+			});
+		} catch {
+			// 文件已不存在等情况视同成功，交给上层清理列表即可。
+		}
+		onRemoved();
+	};
+
+	return (
+		<div
+			onClick={confirming || deleting ? undefined : onRestore}
+			style={{
+				display: "flex",
+				alignItems: "center",
+				gap: 8,
+				width: "100%",
+				padding: "8px 10px",
+				borderRadius: 6,
+				background: confirming ? "rgba(239,68,68,0.06)" : "none",
+				textAlign: "left",
+				cursor: confirming || deleting ? "default" : "pointer",
+				opacity: deleting ? 0.5 : 1,
+				transition: "background 0.12s",
+			}}
+			onMouseEnter={(e) => {
+				if (!confirming) e.currentTarget.style.background = "var(--bg-selected)";
+			}}
+			onMouseLeave={(e) => {
+				if (!confirming) e.currentTarget.style.background = "none";
+			}}
+		>
+			<svg
+				width="12"
+				height="12"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="var(--accent)"
+				strokeWidth="2"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+				style={{ flexShrink: 0 }}
+			>
+				<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+				<polyline points="7 10 12 15 17 10" />
+				<line x1="12" y1="15" x2="12" y2="3" />
+			</svg>
+			<div style={{ flex: 1, minWidth: 0 }}>
+				<div
+					style={{
+						fontSize: 10,
+						color: "var(--text-dim)",
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap",
+						marginBottom: 2,
+					}}
+					title={session.cwd}
+				>
+					{shortenCwd(session.cwd, homeDir)}
+				</div>
+				<div
+					style={{
+						fontSize: 12,
+						fontWeight: 500,
+						color: "var(--text)",
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap",
+					}}
+					title={stitle}
+				>
+					{stitle}
+				</div>
+				<div
+					style={{
+						fontSize: 11,
+						color: "var(--text-dim)",
+					}}
+				>
+					{formatRelativeTime(session.modified)} · {session.messageCount} msgs
+				</div>
+				{session.lastMessage ? (
+					<div
+						style={{
+							marginTop: 3,
+							fontSize: 11,
+							color: "var(--text-dim)",
+							whiteSpace: "pre-wrap",
+							overflow: "hidden",
+							display: "-webkit-box",
+							WebkitLineClamp: 2,
+							WebkitBoxOrient: "vertical",
+						}}
+						title={session.lastMessage}
+					>
+						{session.lastMessage}
+					</div>
+				) : null}
+			</div>
+			{confirming ? (
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: 5,
+						flexShrink: 0,
+					}}
+				>
+					<span
+						style={{
+							fontSize: 11,
+							fontWeight: 600,
+							color: "#ef4444",
+							whiteSpace: "nowrap",
+						}}
+					>
+						彻底删除？
+					</span>
+					<button
+						onClick={confirmDelete}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+							gap: 4,
+							height: 26,
+							padding: "0 9px",
+							background: "#ef4444",
+							border: "none",
+							borderRadius: 6,
+							color: "#fff",
+							cursor: "pointer",
+							fontSize: 11,
+							fontWeight: 600,
+							whiteSpace: "nowrap",
+						}}
+					>
+						删除
+					</button>
+					<button
+						onClick={(e) => {
+							e.stopPropagation();
+							setConfirming(false);
+						}}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+							height: 26,
+							padding: "0 9px",
+							background: "var(--bg)",
+							border: "1px solid var(--border)",
+							borderRadius: 6,
+							color: "var(--text-muted)",
+							cursor: "pointer",
+							fontSize: 11,
+							fontWeight: 500,
+							whiteSpace: "nowrap",
+						}}
+					>
+						取消
+					</button>
+				</div>
+			) : (
+				<>
+					<span
+						style={{
+							fontSize: 11,
+							fontWeight: 600,
+							color: "var(--accent)",
+							flexShrink: 0,
+						}}
+					>
+						还原
+					</span>
+					<button
+						title="彻底删除(不可还原)"
+						onClick={(e) => {
+							e.stopPropagation();
+							setConfirming(true);
+						}}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+							width: 24,
+							height: 24,
+							border: "none",
+							background: "none",
+							color: "var(--text-dim)",
+							cursor: "pointer",
+							borderRadius: 4,
+							flexShrink: 0,
+						}}
+						onMouseEnter={(e) => {
+							e.currentTarget.style.color = "#ef4444";
+							e.currentTarget.style.background = "rgba(239,68,68,0.1)";
+						}}
+						onMouseLeave={(e) => {
+							e.currentTarget.style.color = "var(--text-dim)";
+							e.currentTarget.style.background = "none";
+						}}
+					>
+						<svg
+							width="12"
+							height="12"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						>
+							<polyline points="3 6 5 6 21 6" />
+							<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+							<path d="M10 11v6M14 11v6" />
+							<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+						</svg>
+					</button>
+				</>
 			)}
 		</div>
 	);
@@ -2813,6 +3104,8 @@ function SessionItem({
 	const [renameValue, setRenameValue] = useState("");
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [deleting, setDeleting] = useState(false);
+	const [copied, setCopied] = useState(false);
+	const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const title =
@@ -2845,6 +3138,21 @@ function SessionItem({
 			// ignore
 		}
 	}, [renameValue, session.id, session.name, onRenamed]);
+
+	const handleCopyId = useCallback((e: React.MouseEvent) => {
+		e.stopPropagation();
+		setCopied(true);
+		if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+		copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
+		copyText(session.id).catch(() => setCopied(false));
+	}, [session.id]);
+
+	useEffect(
+		() => () => {
+			if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+		},
+		[],
+	);
 
 	const handleDeleteClick = useCallback((e: React.MouseEvent) => {
 		e.stopPropagation();
@@ -3034,10 +3342,12 @@ function SessionItem({
 							<path d="M18 9a9 9 0 0 1-9 9" />
 						</svg>
 					)}
-					{/* Session status dot: spinner ring while running (also when streaming in
-					    this tab); terminal green/red only for unselected sessions with an
-					    unviewed result (clears once you switch to / view it). */}
-					{session.id === runningSessionId ? (
+					{/* Session status dot: spinner whenever the server reports the session running
+					    (authoritative running-ids set, so background/switched-away sessions get a
+					    stable spinner regardless of selection/seenAt), or while streaming in this
+					    tab (instant front-end fast-path). Terminal green/red show only for
+					    done/failed sessions with an unviewed result. */}
+					{session.id === runningSessionId || session.status === "running" ? (
 						<SessionStatusDot status="running" />
 					) : (
 						session.status &&
@@ -3120,14 +3430,62 @@ function SessionItem({
 					{hovered && (
 						<div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
 							<button
+								onClick={handleCopyId}
+								title={copied ? "Copied!" : "Copy session ID"}
+								style={{
+									display: "flex",
+									alignItems: "center",
+									justifyContent: "center",
+									width: 26,
+									height: 26,
+									padding: 0,
+									background: copied
+										? "rgba(74,222,128,0.14)"
+										: "var(--bg-hover)",
+									border: `1px solid ${copied ? "rgba(74,222,128,0.4)" : "var(--border)"}`,
+									borderRadius: 7,
+									color: copied ? "#4ade80" : "var(--text-muted)",
+									cursor: "pointer",
+									flexShrink: 0,
+									transition:
+										"background 0.12s, color 0.12s, border-color 0.12s",
+								}}
+								onMouseEnter={(e) => {
+									if (copied) return;
+									e.currentTarget.style.background = "var(--bg-selected)";
+									e.currentTarget.style.color = "var(--accent)";
+									e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
+								}}
+								onMouseLeave={(e) => {
+									if (copied) return;
+									e.currentTarget.style.background = "var(--bg-hover)";
+									e.currentTarget.style.color = "var(--text-muted)";
+									e.currentTarget.style.borderColor = "var(--border)";
+								}}
+							>
+								<svg
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+									<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+								</svg>
+							</button>
+							<button
 								onClick={startRename}
 								title="Rename"
 								style={{
 									display: "flex",
 									alignItems: "center",
 									justifyContent: "center",
-									width: 32,
-									height: 32,
+									width: 26,
+									height: 26,
 									padding: 0,
 									background: "var(--bg-hover)",
 									border: "1px solid var(--border)",
@@ -3150,8 +3508,8 @@ function SessionItem({
 								}}
 							>
 								<svg
-									width="14"
-									height="14"
+									width="12"
+									height="12"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="currentColor"
@@ -3169,8 +3527,8 @@ function SessionItem({
 									display: "flex",
 									alignItems: "center",
 									justifyContent: "center",
-									width: 32,
-									height: 32,
+									width: 26,
+									height: 26,
 									padding: 0,
 									background: "var(--bg-hover)",
 									border: "1px solid var(--border)",
@@ -3193,8 +3551,8 @@ function SessionItem({
 								}}
 							>
 								<svg
-									width="14"
-									height="14"
+									width="12"
+									height="12"
 									viewBox="0 0 24 24"
 									fill="none"
 									stroke="currentColor"

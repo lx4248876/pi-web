@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readUiState, setHiddenCwds } from "@/lib/ui-state";
+import { readUiState, setUiState } from "@/lib/ui-state";
 
 export const dynamic = "force-dynamic";
 
@@ -12,18 +12,49 @@ export async function GET() {
   }
 }
 
-// PUT /api/ui-state — 整体保存；body: { hiddenCwds: Record<string, boolean> }
+// PUT /api/ui-state — 合并保存；body 可任选其一或都带：
+// { hiddenCwds?: Record<string,boolean>, trashedSessions?: string[] }
 export async function PUT(req: Request) {
   try {
-    const body = (await req.json()) as { hiddenCwds?: unknown };
+    const body = (await req.json()) as {
+      hiddenCwds?: unknown;
+      trashedSessions?: unknown;
+    };
     if (
-      !body.hiddenCwds ||
-      typeof body.hiddenCwds !== "object" ||
-      Array.isArray(body.hiddenCwds)
+      body.hiddenCwds !== undefined &&
+      (body.hiddenCwds === null ||
+        typeof body.hiddenCwds !== "object" ||
+        Array.isArray(body.hiddenCwds))
     ) {
       return NextResponse.json({ error: "invalid hiddenCwds" }, { status: 400 });
     }
-    return NextResponse.json(setHiddenCwds(body.hiddenCwds as Record<string, boolean>));
+    if (
+      body.trashedSessions !== undefined &&
+      (body.trashedSessions === null ||
+        !Array.isArray(body.trashedSessions) ||
+        !body.trashedSessions.every((s) => typeof s === "string"))
+    ) {
+      return NextResponse.json(
+        { error: "invalid trashedSessions" },
+        { status: 400 }
+      );
+    }
+    if (body.hiddenCwds === undefined && body.trashedSessions === undefined) {
+      return NextResponse.json(
+        { error: "nothing to update" },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json(
+      setUiState({
+        ...(body.hiddenCwds !== undefined
+          ? { hiddenCwds: body.hiddenCwds as Record<string, boolean> }
+          : {}),
+        ...(body.trashedSessions !== undefined
+          ? { trashedSessions: body.trashedSessions as string[] }
+          : {}),
+      })
+    );
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

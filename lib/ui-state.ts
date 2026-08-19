@@ -12,6 +12,8 @@ import { getAgentDir } from "./session-reader";
 
 export interface UiState {
   hiddenCwds: Record<string, boolean>;
+  /** 已删除(软删除/回收站)会话 id 列表。删除后主列表过滤、归档列表可还原。 */
+  trashedSessions: string[];
 }
 
 function uiStatePath(): string {
@@ -25,9 +27,12 @@ function parseUiState(raw: string): UiState {
     return {
       hiddenCwds:
         hidden && typeof hidden === "object" && !Array.isArray(hidden) ? hidden : {},
+      trashedSessions: Array.isArray(parsed.trashedSessions)
+        ? parsed.trashedSessions.filter((s): s is string => typeof s === "string")
+        : [],
     };
   } catch {
-    return { hiddenCwds: {} };
+    return { hiddenCwds: {}, trashedSessions: [] };
   }
 }
 
@@ -35,7 +40,7 @@ export function readUiState(): UiState {
   try {
     return parseUiState(readFileSync(uiStatePath(), "utf8"));
   } catch {
-    return { hiddenCwds: {} };
+    return { hiddenCwds: {}, trashedSessions: [] };
   }
 }
 
@@ -48,10 +53,20 @@ export function writeUiState(state: UiState): void {
   renameSync(tmp, file);
 }
 
-export function setHiddenCwds(hidden: Record<string, boolean>): UiState {
-  const next: UiState = { hiddenCwds: hidden };
+// 合并写入：只更新给定字段，保留其它字段(如 hiddenCwds / trashedSessions 互不覆盖)。
+export function setUiState(partial: Partial<UiState>): UiState {
+  const current = readUiState();
+  const next: UiState = { ...current, ...partial };
   writeUiState(next);
   return next;
+}
+
+export function setHiddenCwds(hidden: Record<string, boolean>): UiState {
+  return setUiState({ hiddenCwds: hidden });
+}
+
+export function setTrashedSessions(ids: string[]): UiState {
+  return setUiState({ trashedSessions: ids });
 }
 
 // 兜底：模块被加载但文件不存在时不应抛错——readUiState 已覆盖；existsSync

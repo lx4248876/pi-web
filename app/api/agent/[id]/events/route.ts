@@ -1,4 +1,4 @@
-import { resolveSessionPath } from "@/lib/session-reader";
+import { isChildSessionPath, resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -11,13 +11,19 @@ export async function GET(
 ) {
   const { id } = await params;
 
+  // 子代理子会话为只读，不为其建立交互事件通道（交互用 /api/subagents/[id]/events）。
+  // 放 fast path 之前：即使子会话 wrapper 意外泄漏进注册表也不被附加。
+  const filePath = await resolveSessionPath(id);
+  if (!filePath) {
+    return new Response("Session not found", { status: 404 });
+  }
+  if (isChildSessionPath(filePath)) {
+    return new Response("Read-only subagent session", { status: 403 });
+  }
+
   // Fast path: already-running session
   let session = getRpcSession(id);
   if (!session || !session.isAlive()) {
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return new Response("Session not found", { status: 404 });
-    }
     const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? process.cwd();
     try {
       ({ session } = await startRpcSession(id, filePath, cwd));

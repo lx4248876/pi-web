@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>改动讲解页 — pi-web 插件市场面板</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161922; --border:#262b38;
+    --text:#e6e9ef; --muted:#9aa3b2; --dim:#616b7d;
+    --accent:#6b9ff2; --good:#34d399; --warn:#fbbf24; --bad:#f87171;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         line-height:1.6; }
+  .wrap { max-width:860px; margin:0 auto; padding:40px 24px 80px; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .sub { color:var(--muted); font-size:14px; margin-bottom:28px; }
+  h2 { font-size:18px; border-bottom:1px solid var(--border); padding-bottom:8px;
+       margin-top:40px; }
+  h3 { font-size:14px; color:var(--accent); margin:22px 0 8px; }
+  code { background:var(--panel); border:1px solid var(--border); border-radius:4px;
+         padding:1px 6px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+         font-size:12.5px; color:#c9d4e8; }
+  .path { font-family:ui-monospace,monospace; font-size:12.5px; color:#b7c4dd; }
+  .box { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+         padding:16px 18px; margin:12px 0; }
+  .box p { margin:8px 0; color:var(--text); }
+  .box .lbl { font-size:11px; color:var(--dim); text-transform:uppercase;
+              letter-spacing:.05em; font-weight:600; margin-bottom:4px; }
+  ul { margin:8px 0 8px 18px; padding:0; }
+  li { margin:5px 0; }
+  .tag { display:inline-block; background:rgba(107,159,242,.14); color:var(--accent);
+         border-radius:4px; padding:1px 7px; font-size:11.5px; font-weight:600;
+         margin-right:6px; }
+  .tag.new { background:rgba(52,211,153,.14); color:var(--good); }
+  .tag.good { color:var(--good); }
+  .arrow { color:var(--dim); margin:0 6px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+          padding:14px 16px; margin:8px 0; }
+  .card .t { font-weight:600; font-size:14px; }
+  .card .d { color:var(--muted); font-size:13px; margin-top:3px; }
+  details { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+            padding:12px 16px; margin:10px 0; }
+  summary { cursor:pointer; font-weight:600; font-size:13.5px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin:10px 0; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  .risk { border-left:3px solid var(--warn); }
+  .note { color:var(--dim); font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>插件市场面板（Packages）</h1>
+  <div class="sub">pi-web 界面新增一个可在网页里「看到并点装即用」的 pi 插件市场，参照现有 Skills 市场。</div>
+
+  <!-- 一句话 -->
+  <h2>一句话</h2>
+  <p>在侧边栏底部加一个 <b>Packages</b> 按钮，点开弹出插件市场：列出 pi.dev 上的插件、按关键词搜索、点「Install」真实执行 <code>pi install npm:包名</code>（全局安装），装完立即显示「✓ Installed」。</p>
+
+  <!-- 为什么改 -->
+  <h2>为什么改</h2>
+  <div class="box">
+    <p><b>现状</b>：pi-web 已有一个 <code>Skills</code> 市场（对接 skills.sh）。但对 <em>pi 官方插件表</em>（pi.dev/packages —— 面向 <code>pi install npm:xxx</code> 安装的包）没有对应界面。用户在网页里没法浏览/搜索/安装 pi 插件。</p>
+    <p><b>需求</b>：在 web 界面里「能看到、点得到、装得上」——就是这个面板。</p>
+  </div>
+
+  <!-- 改动地图 -->
+  <h2>改动地图</h2>
+  <div class="card">
+    <div class="lbl">主改（新建）</div>
+    <div class="t"><span class="tag new">NEW</span><code>/api/packages/route.ts</code></div>
+    <div class="d">抓取 pi.dev/packages，解析包卡片为 JSON 列表（name / description / types / downloads / date / install-cmd / links）。</div>
+
+    <div class="t" style="margin-top:14px"><span class="tag new">NEW</span><code>/api/packages/install/route.ts</code></div>
+    <div class="d">接收包名，跑 <code>pi install npm:包名</code>（全局），返回成功或错误。参照现有 <code>skills/install</code>。</div>
+
+    <div class="t" style="margin-top:14px"><span class="tag new">NEW</span><code>components/PackagesConfig.tsx</code></div>
+    <div class="d">弹窗 UI：左列表 + 右详情 + 顶部搜索框 + 安装按钮，克隆 <code>SkillsConfig.tsx</code> 布局与样式。</div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">主改（接线）</div>
+    <div class="t"><code>components/app-shell/SidebarPanel.tsx</code></div>
+    <div class="d">底部 Models / Skills 旁新增「Packages」按钮与回调占位。</div>
+
+    <div class="t" style="margin-top:14px"><code>components/AppShell.tsx</code></div>
+    <div class="d">加 <code>packagesConfigOpen</code> 状态 + <code>handleOpenPackages</code> + 透传 <code>onOpenPackages</code> + 渲染 <code>PackagesConfig</code>。</div>
+  </div>
+
+  <!-- 逻辑链路 -->
+  <h2>逻辑链路</h2>
+  <div class="box">
+    <code>侧边栏 Packages</code><span class="arrow">→</span>
+    <code>AppShell.setPackagesConfigOpen(true)</code><span class="arrow">→</span>
+    <code>渲染 PackagesConfig</code> → 
+    <code>GET /api/packages?name=关键词</code>（实时抓 pi.dev）<span class="arrow">→</span>
+    <code>点 Install</code><span class="arrow">→</span>
+    <code>POST /api/packages/install {package}</code><span class="arrow">→</span>
+    <code>子进程 pi install npm:xxx（全局）</code><span class="arrow">→</span>
+    前端显示「✓ Installed」或错误
+  </div>
+  <p class="note">搜索走 pi.dev 真实的 <code>?name=</code> 服务端查询（已验证可返回相关包），不是前端本地瞎过滤。</p>
+
+  <!-- 改完你应看到 -->
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>侧边栏底部出现第三个按钮 <b>Packages</b>（Models / Skills / Packages）。</li>
+    <li>点开弹窗列出 pi 插件：名称、类型标签（extension/skill/theme/…）、下载量、描述、npm/GitHub 链接。</li>
+    <li>输入关键词（如 <code>hypa</code>、<code>telegram</code>）实时过滤出匹配插件。</li>
+    <li>点某插件「Install」真实安装到 <code>~/.pi/agent</code>（全局），成功后显示「✓ Installed」。</li>
+  </ul>
+
+  <!-- 先别动 -->
+  <h2>先别动</h2>
+  <ul>
+    <li>不改 <b>Skills</b> 现有逻辑（保留 skills.sh 那条线），两套并存。</li>
+    <li>不改 Models / Git / 会话 / TopBar / RightPanel。</li>
+    <li>不做 pi.dev 本地持久化缓存（每次打开实时抓取；安装状态仅本次会话内记忆）。</li>
+    <li>不做卸载 / 更新 / 版本选择（本期只有浏览 + 安装）。</li>
+  </ul>
+
+  <!-- 未知与假设 -->
+  <h2>未知与假设</h2>
+  <table>
+    <tr><th>项</th><th>当前假设</th></tr>
+    <tr><td>安装作用域</td><td>全局（用户已确认），写 <code>pi install npm:包名</code>。</td></tr>
+    <tr><td>pi 可执行性</td><td>假定找到 <code>pi</code>（node_modules/.bin/pi 或 PATH）；找不到则报清晰错误。安装走 <code>lib/npx</code> 同级的安全执行封装而非裸 shell。</td></tr>
+    <tr><td>搜索参数字段</td><td>pi.dev 提单参数 <code>?name=</code>（已实测返回；注意不是 <code>?q=</code>）。</td></tr>
+    <tr><td>网络</td><td>pi.dev 可达（本机已验证）。失败时接口返回友好错误而非崩溃。</td></tr>
+  </table>
+
+</div>
+</body>
+</html>

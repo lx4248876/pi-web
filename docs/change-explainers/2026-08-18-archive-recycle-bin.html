@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>改动理解：归档会话 → 回收站 + 显示名称与最后一句话</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --dim: #6e7681;
+    --accent: #58a6ff;
+    --warn: #d29922;
+    --green: #3fb950;
+    --red: #f85149;
+    --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    padding: 32px 16px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  h2 { font-size: 16px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 14px; margin: 16px 0 8px; }
+  p { margin: 8px 0; }
+  .lead { color: var(--muted); margin-bottom: 24px; }
+  .risk-banner {
+    background: rgba(210,153,34,.08);
+    border: 1px solid rgba(210,153,34,.35);
+    border-radius: 8px;
+    padding: 12px 16px;
+    color: var(--warn);
+    font-size: 13px;
+    margin: 16px 0;
+  }
+  code {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: "SFMono-Regular", ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    color: #e3b341;
+  }
+  .map {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .map-row {
+    display: flex;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .map-row:last-child { border-bottom: none; }
+  .file {
+    min-width: 200px;
+    color: var(--accent);
+    font-size: 12.5px;
+    font-family: ui-monospace, monospace;
+  }
+  .file .sym { display: block; color: var(--purple); font-size: 11.5px; margin-top: 2px; }
+  .desc { flex: 1; color: var(--text); }
+  .desc b { color: var(--text); }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+  .tag.backend { color: var(--green); border-color: rgba(63,185,80,.4); }
+  .tag.frontend { color: var(--red); border-color: rgba(248,81,73,.4); }
+  ol.steps { padding-left: 20px; }
+  ol.steps > li { margin: 10px 0; }
+  .see ul { padding-left: 20px; }
+  .see li { margin: 7px 0; }
+  .unknown-list li { margin: 7px 0; }
+  details {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 8px 0;
+  }
+  details summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    color: var(--muted);
+    font-size: 12.5px;
+    user-select: none;
+  }
+  details[open] summary { border-bottom: 1px solid var(--border); }
+  details .inner { padding: 10px 14px; font-size: 13px; }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .flow-step {
+    border-left: 2px solid var(--border);
+    padding: 6px 0 6px 14px;
+    margin-left: 4px;
+    position: relative;
+  }
+  .flow-step::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: 12px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .flow-step b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>改动理解：把「归档会话」变成可找回的回收站，并显示会话名称与最后一句话</h1>
+  <p class="lead">只读说明，确认后再改。目标：删除会话不再永久消失，而是移入归档列表可还原回原项目；同时归档列表每条显示会话名称 + 最后一句话。</p>
+
+  <div class="risk-banner">
+    ⚠️ 涉及<strong>删除数据的语义变更</strong>（从「删文件」改为「软删除/回收站」），属于高风险区，评分按 <b>Deep</b> 档。改动会动到底层删除接口、会话列表、以及前端状态持久化。已经删除掉的文件无法恢复，本改动只管「之后」的删除。
+  </div>
+
+  <h2>一句话</h2>
+  <p>
+    给会话删除加一个「回收站」：<code>DELETE</code> 不再真正删文件，而是把该会话记入一个持久化的已删除集合；主列表过滤掉这些会话，归档弹窗把它们和「被关闭项目的会话」一起展示；归档里的「还原」能把它们放回原项目（同时补上会话的「最后一句话」展示）。
+  </p>
+
+  <h2>为什么改（现状与痛点）</h2>
+  <p>
+    现在归档弹窗只收录「被关闭/隐藏项目」下的会话，原因在 <code>SessionSidebar.tsx</code> 里 <code>archived = allSessions.filter(s =&gt; hiddenCwds 包含 s.cwd)</code>。
+    而主列表里点删除时，后端 <code>app/api/sessions/[id]/route.ts</code> 的 <code>DELETE</code> 直接 <code>unlinkSync(filePath)</code> 把 <code>.jsonl</code> 文件删掉，会话彻底没影。所以「我刚才删除的会话」永远不会出现在归档里——这就是你遇到的第一个 bug。
+    另外，归档行目前只显示 <code>name || firstMessage</code> + 时间 + 消息数，没有「最后一句话」，<code>SessionInfo</code> 里也没有 <code>lastMessage</code> 字段——这是第二个 bug。
+  </p>
+
+  <h2>改动地图（主改点，均已核实存在）</h2>
+  <div class="map">
+
+    <div class="map-row">
+      <div class="file">lib/types.ts<span class="sym">· SessionInfo</span></div>
+      <div class="desc">加一个字段 <b><code>lastMessage: string</code></b>，承载会话最后一句话，供归档列表展示。字段是纯增量，不影响其它调用方。</div>
+    </div>
+
+    <div class="map-row">
+      <div class="file">lib/ui-state.ts<span class="sym">· UiState / parseUiState / setUiState</span><span class="tag backend">后端</span></div>
+      <div class="desc">给持久化状态加 <b><code>trashedSessions: string[]</code></b>（已删除会话 id 集合）。这是「回收站」的服务端落盘，机制照抄 <code>hiddenCwds</code>（写 temp 再原子替换，存在 pi agent 目录），避免 localhost / 127.0.0.1 源隔离把回收站记录弄丢。</div>
+    </div>
+
+    <div class="map-row">
+      <div class="file">app/api/ui-state/route.ts<span class="sym">· PUT</span><span class="tag backend">后端</span></div>
+      <div class="desc"><code>PUT</code> 现在只认 <code>hiddenCwds</code> 并整体覆盖；改为允许 <code>{ hiddenCwds?, trashedSessions? }</code> 合并写入，读旧值→更新指定字段→写回，避免删另一字段的状态。</div>
+    </div>
+
+    <div class="map-row">
+      <div class="file">app/api/sessions/[id]/route.ts<span class="sym">· DELETE</span><span class="tag backend">后端</span></div>
+      <div class="desc"><b>核心语义变更</b>：不再 <code>unlinkSync</code> 删文件，也不再改写子会话 header 重挂父级（保留文件供恢复）；仍保留 <code>getRpcSession(id)?.destroy()</code> 停掉活动会话。删除入口照旧由前端调用，「记入回收站」的动作放到前端。删除后文件还在，主列表靠前端过滤。</div>
+    </div>
+
+    <div class="map-row">
+      <div class="file">lib/session-reader.ts<span class="sym">· listAllSessions / 尾部读取</span><span class="tag backend">后端</span></div>
+      <div class="desc">给每个会话补算 <code>lastMessage</code>：复用现有「读文件尾部」的 helper，从尾部最后一条 <code>message</code> 里取出文本（兼容字符串或 text 块、取用户或助手消息都行）。列表接口 <code>GET /api/sessions</code> 随之带出该字段。</div>
+    </div>
+
+    <div class="map-row">
+      <div class="file">components/SessionSidebar.tsx<span class="sym">· trashedSessions / 过滤 / 归档弹窗 / 还原</span><span class="tag frontend">前端</span></div>
+      <div class="desc">
+        <b>（1)</b> 新增 <code>trashedSessions</code>(Set) 状态，加载+合并+持久化整套照抄 <code>hiddenCwds</code>（服务端 <code>/api/ui-state</code> 为准 + localStorage 兜底 + 本地合并回写）。<br>
+        <b>(2)</b> 主列表用一个「<code>visibleSessions = allSessions 去掉 trashed 里的 id</code>」的统一入口，让已删除会话不出现在主列表（子会话因其父被过滤会被树构建自动提升为根，天然成立）。<br>
+        <b>(3)</b> 删除确认回调：仍调 <code>DELETE</code>，成功后把该 id 加入 <code>trashedSessions</code> 并持久化（而非消失）。<br>
+        <b>(4)</b> 归档弹窗：收录范围 = 被关闭项目的会话 <b>∪</b> 回收站里的会话；每条新增一行「最后一句话」预览（用新 <code>lastMessage</code>）。<br>
+        <b>(5)</b> 「还原」按钮分两种：回收站会话→<code>restoreSession</code>（从回收站移除，回到原项目）；被关闭项目会话→保持原 <code>rememberCwd</code>（还原项目）。
+      </div>
+    </div>
+  </div>
+
+  <h2>逻辑链路（删 → 归档 → 还原）</h2>
+  <div class="flow">
+    <div class="flow-step"><b>① 用户在主列表点删除</b> → 前端调 <code>DELETE /api/sessions/:id</code>（后端停活动会话、保留文件、不再删文件）→ 成功后把 <code>id</code> 写入 <code>trashedSessions</code> 并落盘（localStorage + <code>PUT /api/ui-state</code>）→ 触发列表刷新。</div>
+    <div class="flow-step"><b>② 主列表渲染</b> → 统一入口过滤掉 <code>trashedSessions</code> 的 id → 该会话从主列表消失；其子会话因父会话被过滤而自动提升为根，不会悬空消失。</div>
+    <div class="flow-step"><b>③ 刷新列表数据</b> → <code>GET /api/sessions</code> 现在带出 <code>lastMessage</code>，前端保留全量 <code>allSessions</code>（含已删除会话）。</div>
+    <div class="flow-step"><b>④ 打开归档弹窗</b> → <code>archived =（被关闭项目会话）∪（回收站会话）</code>，按 <code>modified</code> 倒序；每行显示 cwd + 会话名 + 时间·消息数 + <b>新增的最后一句话</b>。</div>
+    <div class="flow-step"><b>⑤ 点「还原」</b> → 回收站会话：把 id 从 <code>trashedSessions</code> 移除并落盘 → 立即回到主列表原项目下；被关闭项目会话：原 <code>rememberCwd</code> 还原整个项目。</div>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <div class="see">
+    <ul>
+      <li>从一个「仍可见/已关闭」的项目里删掉某个会话后，它从主列表消失，但打开「归档会话」弹窗能看到它（在最上面，因为刚动过）。</li>
+      <li>归档弹窗每条会显示<strong>会话名 + 最后一句话</strong>（不只 name+时间+消息数）。</li>
+      <li>在归档里点某条「还原」，该会话回到它的原项目下列出；反复删/还原不会丢记录，浏览器重启、换 localhost/127.0.0.1 打开都一致。</li>
+      <li>「关闭项目」产生的归档会话行为不变（仍然只还原项目、不新增回收站语义）。</li>
+    </ul>
+  </div>
+
+  <h2>先别动（明确不做，避免范围失控）</h2>
+  <div class="see">
+    <ul>
+      <li>不做「空回收站 / 永久删除」按钮——文件会一直保留，本次不动它（后续可以做）。</li>
+      <li>不改归档里「被关闭项目」会话的现有还原逻辑。</li>
+      <li>不改变 session 文件本身的内容格式（<code>trashedSessions</code> 只作为外部 UI 状态并存，不写进 <code>.jsonl</code>）。</li>
+      <li>不改主列表其它行的展示；<code>lastMessage</code> 只在归档弹窗新增展示。</li>
+      <li>已删除（文件已没了）的历史会话无法恢复，不处理。</li>
+    </ul>
+  </div>
+
+  <h2>未知与假设</h2>
+  <ul class="unknown-list">
+    <li><b>材料是否够（已够）</b>：删除接口、会话列表、ui-state 持久化、归档弹窗渲染、树构建均已读码核实。</li>
+    <li><b>假设</b>：删除一个会话时，是否连同它的「分叉子会话」一起归档——本次按「仅归档那一条」，子会话在主列表自动提升为根，不级联（如需级联可在确认时说明）。</li>
+    <li><b>假设</b>：还原一个会话时，如果它所在项目当前正处于「关闭」状态，则它仍会因项目隐藏而暂不显示在主页，仅从回收站移除；要看到它需同时还原项目——这与现有隐藏逻辑一致，暂不改。</li>
+    <li><b>假设</b>：已删除会话仍占用磁盘与「最近项目」统计（文件还在）。接受该代价换取可恢复；后续可加永久删除收敛。</li>
+  </ul>
+
+  <details>
+    <summary>看实现级别的键位提示（默认收起，方便核对，非补丁）</summary>
+    <div class="inner">
+      <p class="note">
+        主改点锚点：<code>lib/types.ts</code> 的 <code>interface SessionInfo</code>（加 <code>lastMessage</code>）→
+        <code>lib/ui-state.ts</code> 的 <code>UiState</code>/<code>parseUiState</code>/<code>setHiddenCwds</code>（扩成可含 <code>trashedSessions</code> 的合并写）→
+        <code>app/api/ui-state/route.ts</code> 的 <code>PUT</code>（接受 <code>trashedSessions?</code>，合并写）→
+        <code>app/api/sessions/[id]/route.ts</code> 的 <code>DELETE</code>（去掉 <code>unlinkSync</code> 与子会话重挂，保留 RPC destroy）→
+        <code>lib/session-reader.ts</code> 的 <code>listAllSessions</code>（补 <code>lastMessage</code>，复用现有尾部读）→
+        <code>components/SessionSidebar.tsx</code>（新增 <code>trashedSessions</code> 状态及持久化、主列表过滤、归档∩回收站、还原分支、归档行展示 lastMessage）。
+      </p>
+    </div>
+  </details>
+
+  <h2>已完成 · 实际动过的文件</h2>
+  <div class="see">
+    <ul>
+      <li><code>lib/types.ts</code> — <code>SessionInfo</code> 新增 <code>lastMessage</code> 字段。</li>
+      <li><code>lib/ui-state.ts</code> — <code>UiState</code> 新增 <code>trashedSessions</code>；<code>setUiState</code> 合并写；<code>setTrashedSessions</code>；<code>setHiddenCwds</code> 改为合并写（不再互相覆盖）。</li>
+      <li><code>app/api/ui-state/route.ts</code> — <code>PUT</code> 接受 <code>{hiddenCwds?, trashedSessions?}</code> 合并保存。</li>
+      <li><code>app/api/sessions/[id]/route.ts</code> — <code>DELETE</code> 改为软删除：不再删文件/重挂子会话，只停活动会话。</li>
+      <li><code>lib/session-reader.ts</code> — 尾部读取改为共享缓存，新增 <code>readSessionLastMessage</code>；列表补 <code>lastMessage</code>。</li>
+      <li><code>components/SessionSidebar.tsx</code> — 回收站状态/持久化、主列表过滤、归档∪回收站、按「回收站 or 被关闭项目」还原分支、归档行显示最后一句话。</li>
+      <li><code>hooks/useAgentSession.ts</code>、<code>components/AppShell.tsx</code> — 为新增 <code>lastMessage</code> 字段补齐创建时快照（类型完整性）。</li>
+      <li>测试：<code>tests/trash-sessions.test.ts</code>、<code>tests/session-last-message.test.ts</code>（新增）。</li>
+    </ul>
+  </div>
+
+  <h2>怎么测（你在浏览器里亲手验证）</h2>
+  <ol class="steps">
+    <li>打开 <code>http://localhost:3030</code>，左侧是一个项目下的会话列表。</li>
+    <li>在某个<strong>不重要的已完成会话</strong>上悬浮，点垃圾桶图标 → 确认 Delete。此刻该会话会从列表消失，但<strong>文件没删</strong>（在回收站里）。</li>
+    <li>点标题栏的「归档会话」按钮，弹出列表里应能看到刚删的会话，且<strong>每行多了一行最后的对话内容</strong>（最后一句话）。</li>
+    <li>点那一行的「还原」→ 弹窗关闭，该会话<strong>回到原项目的会话列表</strong>中。</li>
+    <li>反复删/还原几次，或刷新/换 localhost 与 127.0.0.1 打开，记录都还在（服务端持久化）。</li>
+  </ol>
+
+  <h2>验证事实（真实跑过）</h2>
+  <div class="see">
+    <ul>
+      <li>类型检查 <code>node_modules/.bin/tsc --noEmit</code> → 通过。</li>
+      <li><code>npm test</code> → 29/29 通过（含新增 5 项：回收站持久化/合并不互踩/默认空 + lastMessage 三态）。</li>
+      <li>真实浏览器：删除会话后主列表立即移除；<code>/api/sessions</code> 仍返回该会话且带 <code>lastMessage</code>；<code>/api/ui-state</code> 的 <code>trashedSessions</code> 记录该 id、<code>hiddenCwds</code> 32 项保持不变；还原后 <code>trashedSessions</code> 清空、两会话回原列表。验收数据已全部还原，无丢失。</li>
+      <li>页面验收报告：<code>.web-verify/reports/archive-recycle-bin/report.md</code>（4 PASS；归档弹窗内「还原」视觉点击因浏览器为共享活跃多标签未能隔离，改由状态/API/单测覆盖，不作视觉 PASS）。</li>
+    </ul>
+  </div>
+
+  <h2>已知边界（本次明确不做）</h2>
+  <div class="see">
+    <ul>
+      <li>没有「空回收站 / 永久删除」按钮——删除后文件一直保留（可后续加收敛）。</li>
+      <li>回收站记录是<strong>多标签 last-write-wins</strong>（与既有的 hiddenCwds 同一模式），极端多标签并发删除可能相互覆盖——非本改动引入，已记录。</li>
+      <li>还原一个会话若其所在项目处于「关闭」状态，则它只从回收站移除、仍因项目隐藏而不显示主页（需一并还原项目）——已按你确认的行为实现。</li>
+      <li>删除一个带分叉子会话的会话时，仅归档该会话、子会话自动提升为根，不级联——已按你确认的行为实现。</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveSessionPath } from "@/lib/session-reader";
+import { isChildSessionPath, resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -13,16 +13,25 @@ export async function POST(
   try {
     const body = await req.json() as { type: string; [key: string]: unknown };
 
+    const filePath = await resolveSessionPath(id);
+    if (!filePath) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
+    // 子代理子会话为只读：拒绝任何命令，绝不为其启动活跃代理进程。
+    // 放在 fast path 之前：即使子会话 wrapper 意外泄漏进注册表，也不被接管/命令。
+    if (isChildSessionPath(filePath)) {
+      return NextResponse.json(
+        { error: "Read-only subagent session; commands are not allowed" },
+        { status: 403 },
+      );
+    }
+
     // Fast path: already-running session
     const existing = getRpcSession(id);
     if (existing?.isAlive()) {
       const result = await existing.send(body);
       return NextResponse.json({ success: true, data: result });
-    }
-
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
     const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? process.cwd();

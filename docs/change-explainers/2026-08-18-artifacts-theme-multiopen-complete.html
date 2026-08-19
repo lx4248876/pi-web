@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>交付讲解：产物横条增强（主题跟随 + 当轮多开）</title>
+<style>
+  :root{--b:#e2e8f0;--m:#64748b;--t:#0f172a;--a:#2563eb;--g:#16a34a;--db:#f1f5f9;--cb:#dbeafe}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--t);max-width:880px;margin:0 auto;padding:32px 22px 80px;line-height:1.66}
+  h1{font-size:22px;margin:0 0 6px}h2{font-size:17px;margin:28px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--b)}
+  p{margin:8px 0}.muted{color:var(--m);font-size:13px}
+  .badge{display:inline-block;background:var(--g);color:#fff;border-radius:4px;padding:1px 8px;font-size:12px;font-weight:600;margin-right:8px}
+  code{background:var(--db);padding:1px 5px;border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em}
+  .card{border:1px solid var(--b);border-left-width:4px;border-left-color:var(--a);border-radius:8px;padding:12px 14px;margin:10px 0;background:#fff}
+  details{margin-top:8px}summary{cursor:pointer;color:var(--m);font-size:13px}
+  ul{padding-left:22px}li{margin:5px 0}.ok{color:var(--g);font-weight:600}
+  pre.step{background:#0f172a;color:#cbd5e1;border-radius:8px;padding:12px;font-size:12px;overflow:auto}
+  .howto{background:var(--cb);border:1px solid #93c5fd;border-radius:8px;padding:12px 14px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+</style>
+</head>
+<body>
+<h1>交付讲解：产物横条增强</h1>
+<p class="muted"><span class="badge">已完成</span> 生成于 2026-08-18；基于真实 diff 与页面验收。</p>
+
+<h2>一句话结论</h2>
+<p>① 文件查看器里预览 <strong>HTML</strong> 时，现在会<strong>跟随 web 页面的明暗主题</strong>：切深色模式，没写背景色的 HTML 预览也变深底浅字。② 点产物横条里<strong>任意一个文件</strong>，会把这<strong>一轮</strong>的其它产物也一起在文件查看器里开成标签页，标签栏直接切换；范围限当轮，不越开越乱。</p>
+
+<h2>生活类比</h2>
+<p>① 像把打印好的页面放进「深色灯箱」看——纸没有自己颜色时，灯箱是什么色它就显什么色；纸自己印了颜色，印的优先。② 像一次把这一单的几个附件都摊开在工作台上切成标签页，哪个都能随手翻到，而不是一次只递你一张纸、再看下一张得回去翻。</p>
+
+<h2>动了哪几块</h2>
+<div class="card"><code>lib/html-preview-theme.ts</code>（新增）— <strong>主题注入器</strong><p class="muted">纯函数 <code>applyPreviewTheme(html, isDark)</code>：往预览 HTML 里塞一段低优先级样式，写 <code>color-scheme</code> 与默认底色/文字色；文件自己写了样式就覆盖它。</p></div>
+<div class="card"><code>lib/artifacts.ts</code>（扩充）— <strong>开启顺序</strong><p class="muted">加 <code>orderedArtifactOpen(artifacts, activePath)</code>：把点中的那个排到最后，让它在标签栏保持激活。</p></div>
+<div class="card"><code>components/FileViewer.tsx</code>（改动）— <strong>HTML 预览接入主题</strong><p class="muted">预览 iframe 的 <code>srcdoc</code> 改由 <code>applyPreviewTheme(content, isDark)</code> 生成；<code>isDark</code> 切了预览跟着变。</p></div>
+<div class="card"><code>components/ArtifactStrip.tsx</code>（改动）— <strong>点一个开整轮</strong><p class="muted">chip 点击从「只开这一个」改成「按 <code>orderedArtifactOpen</code> 把该轮全部产物逐个开成标签，点中的最后开(激活)」。</p></div>
+
+<h2>怎么测（你也能验证）</h2>
+<div class="howto">1. 深色模式下打开一个没写背景色的 HTML 文件（文件查看器 → Preview）→ 预览是深底浅字；切回浅色变白底黑字。<br>
+2. 在一轮写了多个文件的会话里，点产物横条任一个文件名 → 文件查看器标签栏一次出现该轮全部文件，想切哪个切哪个，当前激活的是你点的那个。<br>
+3. 只读/问答轮没有横条。</div>
+
+<h2>自动化</h2>
+<pre class="step">node --import jiti/register --test tests/html-preview-theme.test.ts tests/artifacts.test.ts  # 17 绿
+node_modules/.bin/tsc --noEmit          # 0 错
+npm test                                # 全套 96 绿，无回归</pre>
+<details><summary>看改动代码（点开）</summary>
+<pre class="step">// lib/html-preview-theme.ts —— 主题注入
+export function applyPreviewTheme(html, isDark) {
+  const cs = isDark ? "dark" : "light";
+  const bg = isDark ? "#1a1a1a" : "#ffffff";
+  const style = `<style>html{color-scheme:${cs}}body{background-color:${bg};color:${isDark?"#e5e7eb":"#1f2937"}}</style>`;
+  const m = html.match(/<head[^>]*>/i);
+  return m ? html.slice(0,m.index+m[0].length)+style+html.slice(m.index+m[0].length) : style + html;
+}</pre>
+</details>
+
+<h2>没动什么 / 边界</h2>
+<ul>
+  <li>没动文件查看器本体、tab 去重逻辑、AppShell/ChatWindow 接线。</li>
+  <li>没做「会话级累计 / 全部自动开」（你已明确不累计）。</li>
+  <li>带完整自设背景/文字的 HTML 保持自身样式，不强行跟随；预览 sandbox 与脚本能力不变。</li>
+</ul>
+
+<h2>验证事实</h2>
+<ul>
+  <li class="ok">单测 17/17 绿（新逻辑先 Red 后 Green），全套 96 绿无回归；tsc 0 错；lint 本次文件无报错。</li>
+  <li class="ok">页面验收（browser，CDP）：深色切浅色预览 color-scheme/底色随动；点 one 产物 → 当轮 8 个文件全部开成标签、激活点中的那个 — PASS（.web-verify/reports/artifacts-theme-multiopen/report.md + 截图）。</li>
+  <li>本次为轻量路由：主代理实现 + 纯函数 TDD + 自审 + 页面门；未重复派 reviewer 子代理（变更小且隔离）。</li>
+</ul>
+</body>
+</html>

@@ -8,6 +8,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTheme } from "@/hooks/useTheme";
 import { GitPanel } from "./GitPanel";
+import { applyPreviewTheme } from "@/lib/html-preview-theme";
 import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 
 interface Props {
@@ -921,7 +922,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
           <DiffView oldContent={prevContent!} newContent={data.content} language={data.language} />
         ) : isHtml && previewMode ? (
           <iframe
-            srcDoc={data.content}
+            srcDoc={applyPreviewTheme(data.content, isDark)}
             sandbox="allow-scripts"
             style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
             title="HTML preview"

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>改动理解：子代理可见 + 只读实时尾读</title>
+  <style>
+    :root{--ink:#1d2733;--muted:#6b7686;--line:#e2e6ec;--bg:#f7f8fa;--card:#ffffff;
+          --main:#0b6bcb;--main-bg:#e9f3fd;--ripple:#7a4bb3;--ripple-bg:#f1e9fa;
+          --risk:#b3261e;--risk-bg:#fdecec;--ok:#0b7a3b;--warn:#8a5a00;
+          --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.7 -apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;padding:28px 20px 80px}
+    .wrap{max-width:860px;margin:0 auto}
+    h1{font-size:22px;margin:0 0 6px}
+    h2{font-size:17px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+    p{margin:8px 0}
+    .muted{color:var(--muted);font-size:13px}
+    .badge{display:inline-block;padding:1px 8px;border-radius:10px;background:#eef2f7;color:#445;font-weight:600;font-size:12px;border:1px solid var(--line)}
+    .badge.deep{background:var(--ripple-bg);color:var(--ripple);border-color:#d9c7f0}
+    code{font-family:var(--mono);font-size:12.5px;background:#eef1f5;padding:1px 5px;border-radius:4px;white-space:nowrap}
+    .riskbar{margin:16px 0;padding:12px 14px;background:var(--risk-bg);border:1px solid #f3c6c2;border-radius:8px;color:var(--risk);font-weight:600}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+    .card.main{border-left:4px solid var(--main)}
+    .card.ripple{border-left:4px solid var(--ripple);background:#fcfafd}
+    .card code{background:transparent;padding:0;font-weight:600}
+    summary{cursor:pointer;color:var(--main);font-size:13px;user-select:none;margin-top:4px}
+    details[open] summary{margin-bottom:6px}
+    .drop{color:var(--muted);font-size:13px}
+    .flow{display:flex;flex-wrap:wrap;gap:6px 4px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}
+    .flow .step{background:var(--main-bg);color:var(--main);border:1px solid #c5e0f8;padding:2px 9px;border-radius:12px;font-size:12.5px;white-space:nowrap}
+    .flow .arrow{color:var(--muted)}
+    ul{margin:6px 0;padding-left:20px}
+    li{margin:4px 0}
+    .flag{color:var(--ok);font-weight:600}
+    .warn{color:var(--warn);font-weight:600}
+    .note{background:#fffdf2;border:1px solid #efe6c4;border-radius:8px;padding:10px 12px;margin:10px 0}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>改动理解：子代理可见 + 只读实时尾读</h1>
+  <p class="muted"><span class="badge deep">Deep</span> 生成于 2026-08-19；基于仓库只读核实（C:/A-codes/lix/pi-web）。</p>
+
+  <div class="riskbar">⚠ 高风险：本改动涉及「会话」读取/状态判定。风险主要是「误把只读浏览当成可交互会话去启动 agent」。本设计用「子会话=只读尾读、绝不 startRpcSession」的硬边界隔离它，且不动 pi 运行时。详见「未知与假设」置顶段。</div>
+
+  <h2>一句话</h2>
+  <p>让 web 页面能看到子代理：递归把藏在 <code>sessions/&lt;父id&gt;/…</code> 里的子会话捞进侧栏父节点下（带运行/完成/失败状态点），点击后以<b>只读</b>方式浏览该子代理；对仍在跑的子代理做<b>文件尾读实时跟踪</b>，随它边跑边刷。全程不启动、不接管子代理进程。</p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <code>lib/session-reader.ts</code> · <code>listAllSessions</code> — 会话列表入口（主改）
+    <details><summary>怎么改 / 为什么</summary>
+    <p>现状只调 <code>SessionManager.listAll()</code>，而 pi 的 listAll 只扫 <code>sessions/&lt;目录&gt;/*.jsonl</code> 一层子目录，子代理文件在两级深处，所以根本看不到。改成：在原列表基础上额外<b>递归</b>遍历 <code>sessions/&lt;父id&gt;/async-*</code>、<code>chain-*</code>、<code>dynamic-*</code> 等子目录里的 <code>.jsonl</code>，合并成同一个 <code>SessionInfo[]</code>（带 <code>parentSessionId</code> 归组）。为结果加一个「这是子代理会话」的 <code>browseOnly</code> 标记，并复用现有 tail 缓存为它推导状态。</p></details>
+  </div>
+
+  <div class="card main">
+    <code>app/api/subagents/[id]/events/route.ts</code>（新建）— 子会话只读尾读 SSE（主改）
+    <details><summary>怎么改 / 为什么</summary>
+    <p>新增一条<b>只读</b>的 SSE：tail 目标子会话的 <code>.jsonl</code>，把新增条目实时推给前端。硬边界：这条路<b>绝不调用</b> <code>startRpcSession</code> / <code>getRpcSession</code>，也不依赖活跃 RPC 会话。以此避免复用现有 <code>/api/agent/[id]/events</code>（那条会尝试启动活跃 agent，对浏览式子会话禁止）。用 mtime/size + offset 增量读，控制开销。</p></details>
+  </div>
+
+  <div class="card main">
+    <code>hooks/useAgentSession.ts</code> · <code>loadSession</code> / <code>connectEvents</code> — 前端打开分支（主改）
+    <details><summary>怎么改 / 为什么</summary>
+    <p>当前选中普通会话时若 <code>agentState.running</code> 会连 <code>/api/agent/[id]/events</code>（可交互通道）。给选中项加一个 <code>browseOnly</code> 分支：子代理会话走 <code>/api/sessions/[id]</code> 只读快照 + 打开上面的子代理尾读 SSE，且<b>不发任何命令</b>。这样必然只读，天然符合仓库「浏览会话必须只读、不 spawn 活跃 agent」的铁律。</p></details>
+  </div>
+
+  <div class="card main">
+    <code>components/ChatWindow.tsx</code> + <code>components/SessionSidebar.tsx</code> — 只读观感 + 子节点状态点（主改）
+    <details><summary>怎么改 / 为什么</summary>
+    <p>选中子会话时隐藏 <code>ChatInput</code>（只读观看，不可发送）；侧栏已按 <code>parentSessionId</code> 把子会话归到父节点下（树结构现成），补上对运行中子代理的「转圈」状态点（由文件仍在跑判定）。这样用户能直观看到「父在跑 → 底下冒子节点 → 转圈 → 停 → 绿/红」。</p></details>
+  </div>
+
+  <div class="card ripple">
+    <code>lib/types.ts</code> · <code>SessionInfo</code> — 增加 <code>browseOnly</code> 标记（波及）
+    <details><summary>怎么改 / 为什么</summary><p>给 <code>SessionInfo</code> 加一个可选 <code>browseOnly</code>（或 <code>isChild</code>）。前端据此走只读分支、隐藏输入框、限制改名/删除按钮。</p></details>
+  </div>
+
+  <div class="card ripple">
+    <code>lib/rpc-manager.ts</code> — 侧限：不改注册表，也不加子代理 RPC（波及）
+    <details><summary>怎么改 / 为什么</summary><p><b>不改</b> <code>globalThis.__piSessions</code>、<code>__piStartLocks</code>、<code>getActiveRpcSessionIds</code>。运行中子代理的状态不靠注册表，而从文件 mtime 仍增长 + tail 未收尾推导。保持「pi-web 只管顶层会话」的边界，降低对既有稳定的影响。</p></details>
+  </div>
+
+  <div class="card ripple">
+    <code>app/api/sessions/route.ts</code> / <code>[id]/route.ts</code> — 预期复用、需回归确认（波及）
+    <details><summary>怎么改 / 为什么</summary><p><code>/api/sessions</code> 直接复用 <code>listAllSessions</code> 输出，无需改；<code>/api/sessions/[id]</code> 已能只读打开子会话（<code>getRpcSession(child)=undefined → running:false</code>，前端不会误连交互通道）。但要回归：PATCH 改名 / DELETE 软删除落到子会话的语义需确认，前端对子会话隐藏这两个入口以免误操作。</p></details>
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="step">父会话开跑</span><span class="step">agent 调 subagent</span><span class="step">子进程写 sessions/&lt;父id&gt;/async-*</span><span class="arrow">→</span>
+    <span class="step">listAllSessions 递归发现</span><span class="step">侧栏父节点下冒子节点(转圈)</span><span class="arrow">→</span>
+    <span class="step">点击子会话</span><span class="step">useAgentSession 识别 browseOnly</span><span class="arrow">→</span>
+    <span class="step">/api/sessions/[id] 只读快照</span><span class="step">打开子代理尾读 SSE</span><span class="arrow">→</span>
+    <span class="step">输入框隐藏</span><span class="step">子代理边跑边刷</span><span class="arrow">→</span>
+    <span class="step">文件停增→绿/红、跟随停止</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li class="flag">父会话跑子代理后，侧栏父节点下实时冒出子会话节点，带「转圈」运行点。</li>
+    <li class="flag">点击任一子会话，主区以<b>只读</b>方式实时显示该子代理的进展（消息/工具随跑随出）。</li>
+    <li class="flag">子代理停下后状态点转绿（完成）或红（出错）；实时跟随自动停止。</li>
+    <li class="flag">浏览子会话时输入框隐藏，不会误触发「继续/发送」去接管子代理。</li>
+    <li class="flag">既有顶层会话的创建/交互/列表完全不变。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不动 pi 运行时 / <code>pi-subagents</code> 扩展（子代理照旧由 pi 自己进程跑）。</li>
+    <li>不启动、不接管、不可对子会话发交互命令（专注只读观看）。</li>
+    <li>不做「全局子代理列表」「Subagent 发起」「工作区隔离」（本次收敛到“当前父会话的子会话可见 + 只读查看”）。</li>
+    <li>不改现有 <code>/api/agent/[id]/events</code> 会话交互通道（它用于可交互会话，保持原样）。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <div class="note">
+    <p><b>风险置顶：</b>本功能触碰「会话读取 + 状态判定」。若把子会话误当成可交互 RPC 会话，会产生凭空启动 agent 的副作用。落地时以「只读尾读、绝不 start」为硬边界，并以最小回归验证（打开 /api/sessions 列表、打开一个子会话、确认无新生 RPC 进程）守住。</p>
+  </div>
+  <ul>
+    <li>未知：pi-subagents 是否在某些场景把子会话写到 <code>os.tmpdir()</code>（<code>getSubagentSessionRoot</code> 仅当「无父 session 文件」才走 temp；pi-web 里父都是 pi-web 建的，故应有父文件，但需真机确认）。</li>
+    <li>未知：子代理结束后，<code>sessions/&lt;父id&gt;/async-*</code> 历史文件是否保留（取决于 pi-subagents 清理策略）；若被删，历史子会话可能不显示——需联调观察。</li>
+    <li>未知：子代理「运行中」无官方事件，只能靠「mtime/size 仍增长 + tail 未收尾」判转圈；阈值需联调微调。</li>
+    <li>假设：子代理由独立 <code>pi</code> 进程以 <code>--session-dir</code> 写法落到 <code>sessions/&lt;父id&gt;/</code> 下，可被跨进程递归扫到；此路径稳定。</li>
+    <li>材料：够 — 已核实子会话落位（pi-subagents <code>getSubagentSessionRoot</code> + <code>--session-dir</code>）、pi <code>listAll</code> 单层扫描局限（session-manager.js）、只读打开路径（<code>/api/sessions/[id]</code>）、前端通道（useAgentSession connectEvents）。</li>
+  </ul>
+</div>
+</body>
+</html>

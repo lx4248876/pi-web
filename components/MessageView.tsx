@@ -568,6 +568,7 @@ function AssistantMessageView({
         .map((b) => b.text)
         .join("\n");
 
+
     const copyContent = () => {
         copyText(textContent).then(() => {
             setCopied(true);

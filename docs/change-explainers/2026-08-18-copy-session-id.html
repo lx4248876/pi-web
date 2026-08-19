@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>改动理解：会话侧栏复制会话ID</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,Microsoft YaHei,sans-serif;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.6;color:#1a1a1a;background:#fff}
+  h1{font-size:22px;margin-bottom:4px}
+  .muted{color:#666;font-size:13px}
+  h2{font-size:16px;margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid #e5e5e5}
+  .badge{display:inline-block;background:#2563eb;color:#fff;border-radius:5px;font-size:11px;padding:2px 8px;font-weight:600;vertical-align:middle}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#f6f8fa;border:1px solid #e0e0e0;border-radius:8px;padding:12px;font-size:13px;margin:8px 0}
+  .flow .node{background:#fff;border:1px solid #d0d0d0;border-radius:6px;padding:4px 10px;white-space:nowrap}
+  .flow .arrow{color:#999}
+  .card{border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;margin:10px 0}
+  .card.main{border-left:3px solid #2563eb}
+  .card.ripple{border-left:3px solid #f59e0b}
+  .card code{background:#f1f3f5;border-radius:4px;padding:1px 5px;font-size:12px}
+  details{margin-top:8px}
+  details summary{cursor:pointer;color:#2563eb;font-size:14px}
+  details p{margin:8px 0 0;font-size:14px;color:#333}
+  .risk{border:1px solid #ef4444;background:#fef2f2;color:#b91c1c;border-radius:8px;padding:10px 14px;font-size:13px;margin:16px 0}
+</style>
+</head>
+<body>
+  <h1>改动理解：会话侧栏可一键复制「会话ID」</h1>
+  <p class="muted"><span class="badge">Standard</span> 生成于 2026-08-18；基于仓库只读核实。</p>
+
+  <div class="risk">提示：涉及「会话」属于高风险词范畴，本改动只新增一个<b>复制按钮</b>，不改动任何会话创建/读取/删除逻辑本身；因与「会话」相关故按 Standard 档交付更强的理解材料。</div>
+
+  <h2>一句话</h2>
+  <p>在左侧会话列表每个会话行的悬停操作区，加一个「复制会话ID」按钮，点击后把该会话的唯一ID复制到剪贴板，方便用户粘贴转发给排查方（比如我）。</p>
+
+  <h2>改动地图</h2>
+  <div class="card main">
+    <code>components/SessionSidebar.tsx</code> · <code>SessionItem</code> — 会话单行组件，含悬停时的操作按钮（重命名/删除等）
+    <details><summary>怎么改 / 为什么</summary>
+      <p>在 <code>SessionItem</code> 的悬停操作按钮区内，紧挨现有按钮加一个复制图标按钮，点击时把 <code>session.id</code> 写入剪贴板并给个已复制反馈（如短暂变色/标题）。为什么落这：这里已聚集了会话行的所有典型操作，用户目光和交互习惯都在这儿；且每行已持有当前 <code>session</code>，无需再查 ID。</p>
+    </details>
+  </div>
+  <div class="card main">
+    <code>components/SessionSidebar.tsx</code> · <code>copy 文本工具函数</code>（新增局部函数）
+    <details><summary>怎么改 / 为什么</summary>
+      <p>在文件内补一个几十行的复制小工具（<code>navigator.clipboard.writeText</code>，失败回退到隐藏 textarea + <code>execCommand("copy")</code>），和 <code>MessageView.tsx</code> 里已有的 <code>copyText</code> 同款实现。为什么不在别处改：<code>MessageView.tsx</code> 的 <code>copyText</code> 未导出，跨文件引用耦合重，不如在 <code>SessionSidebar</code> 本地自带一份，改动更内聚。</p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <code>components/MessageView.tsx</code> · <code>copyText</code> — 现有复制实现（本次<b>不改</b>，仅作参照）
+    <details><summary>波及说明</summary>
+      <p>只读参照，无需改动；避免为复用而改它的导出签名，扩大影响面。</p>
+    </details>
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="node">用户悬停会话行</span>
+    <span class="arrow">→</span>
+    <span class="node">显示操作按钮（含新的复制图标）</span>
+    <span class="arrow">→</span>
+    <span class="node">点击复制 → 本地工具函数写剪贴板</span>
+    <span class="arrow">→</span>
+    <span class="node">剪贴板得到该会话ID，供粘贴转发</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>鼠标悬停在任一会话行时，右侧操作区出现复制图标按钮。</li>
+    <li>点击后系统剪贴板里就是该会话的完整 sessionId；粘到聊天框/文档可确认。</li>
+    <li>按钮有轻微点击反馈（颜色变化或标题文字切换为「已复制」）。</li>
+    <li>会话行的选中/重命名/删除/折叠等既有行为完全不受影响。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不改 <code>MessageView.tsx</code> 的 <code>copyText</code> 导出与调用。</li>
+    <li>不改会话的后端 API / RPC 管理（<code>lib/rpc-manager.ts</code> 等）与任何会话增删改逻辑。</li>
+    <li>不改动作按钮的布局与尺寸体系（沿用现有 32×32、边线、悬停配色）。</li>
+    <li>不做全局「复制当前会话ID」等其他快捷入口，本条仅覆盖每行一个按钮。</li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li>未知：浏览器为 <code>http</code>（非 localhost 白名单）环境下 <code>navigator.clipboard</code> 是否可用；已有回退方案覆盖。</li>
+    <li>假设：用户更希望在每行按钮里复制局部ID，而非在页面头/URL 隐藏处放全局复制。</li>
+    <li>材料：够（<code>SessionItem</code> 结构、现有复制工具、hover 按钮区均已定位核实）。</li>
+  </ul>
+</body>
+</html>

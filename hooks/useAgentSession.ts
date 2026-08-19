@@ -5,6 +5,7 @@ import type { AgentMessage, SessionInfo, SessionTreeNode } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { appendCompletedMessage } from "@/lib/agent-message-merge";
+import { shouldReconnect } from "@/lib/event-channel";
 import type { ToolEntry } from "@/components/ToolPanel";
 
 export interface SessionData {
@@ -243,6 +244,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	} = opts;
 
 	const isNew = session === null && newSessionCwd !== null;
+	const browseOnly = session?.browseOnly ?? false;
 
 	const [data, setData] = useState<SessionData | null>(null);
 	const [loading, setLoading] = useState(!isNew);
@@ -319,6 +321,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	} | null>(null);
 
 	const eventSourceRef = useRef<EventSource | null>(null);
+	// Read-only live follow of a subagent child session (separate SSE from the parent stream).
+	const childSourceRef = useRef<EventSource | null>(null);
 	const sessionIdRef = useRef<string | null>(session?.id ?? null);
 	// Notify the shell once per session when its first assistant message lands on disk,
 	// so the session list refreshes as soon as the new session file exists (not only at agent_end).
@@ -541,23 +545,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		};
 		es.onerror = () => {
 			setSseState("disconnected");
-			if (eventSourceRef.current === es) {
+			if (shouldReconnect(eventSourceRef.current === es)) {
 				es.close();
 				eventSourceRef.current = null;
 
-				// 如果 agent 处于活跃运行（对话输出未结束）状态下意外在长轮询中掉线，我们必须进行指数退避重连；
-				// 如果当时未在运行，普通心跳暂时中断则不需要在客户端盲目引发高频重试，在发送时直接建立新连接或保持默认静默。
-				if (agentRunningRef.current) {
-					const attempt = sseReconnectAttemptRef.current;
-					const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
+				// 只要当前连接掉线就须重连（指数退避限频）：事件通道不能依赖
+				// 「当时是否正在运行」，通道必须始终在，question 等事件才递得到。
+				const attempt = sseReconnectAttemptRef.current;
+				const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
 
-					sseReconnectAttemptRef.current += 1;
-					setSseState("connecting");
+				sseReconnectAttemptRef.current += 1;
+				setSseState("connecting");
 
-					sseReconnectTimerRef.current = setTimeout(() => {
-						if (agentRunningRef.current) connectEvents(sid);
-					}, delay);
-				}
+				sseReconnectTimerRef.current = setTimeout(() => {
+					connectEvents(sid);
+				}, delay);
 			}
 		};
 	}, []);
@@ -565,6 +567,52 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	useEffect(() => {
 		agentRunningRef.current = agentRunning;
 	}, [agentRunning]);
+
+	// ---- Read-only live follow of a subagent child session -----------------------
+	// The child runs in its own pi process and writes its own session file; we tail
+	// it via /api/subagents/[id]/events (a browse-only channel). No commands are ever
+	// sent, so this can never start or steer the child agent.
+	const connectChildEvents = useCallback((sid: string) => {
+		if (childSourceRef.current) {
+			childSourceRef.current.close();
+			childSourceRef.current = null;
+		}
+		setSseState("connecting");
+		const es = new EventSource(`/api/subagents/${encodeURIComponent(sid)}/events`);
+		childSourceRef.current = es;
+		es.onopen = () => setSseState("connected");
+		es.onmessage = (e) => {
+			try {
+				const event = JSON.parse(e.data) as Partial<{
+					type: string;
+					messages?: AgentMessage[];
+					running?: boolean;
+				}>;
+				if (event.type === "child_update") {
+					const msgs = event.messages ?? [];
+					if (msgs.length > 0) {
+						setMessages((prev) =>
+							msgs.reduce((acc, m) => appendCompletedMessage(acc, normalizeToolCalls(m)), prev),
+						);
+						dispatch({ type: "start" });
+					}
+					setAgentRunning(Boolean(event.running));
+				} else if (event.type === "child_terminal") {
+					setAgentRunning(false);
+					dispatch({ type: "end" });
+					setSseState("disconnected");
+					// 子代理结束：关闭只读通道，避免连接泄漏。
+					if (childSourceRef.current) {
+						childSourceRef.current.close();
+						childSourceRef.current = null;
+					}
+				}
+			} catch {
+				// ignore malformed frames
+			}
+		};
+		es.onerror = () => setSseState("disconnected");
+	}, []);
 
 	const handleAgentEvent = useCallback(
 		(event: AgentEvent) => {
@@ -810,6 +858,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			images?: AttachedImage[],
 			opts?: { bypassRunning?: boolean },
 		) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止发送
 			if (!message.trim() && !images?.length) return;
 			// bypassRunning lets the auto-retry ('继续') send while the agent is still
 			// marked running at message_end; a normal user send must still be guarded.
@@ -914,6 +963,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 						modified: new Date().toISOString(),
 						messageCount: 1,
 						firstMessage: message,
+						lastMessage: message,
 					});
 				} else if (session) {
 					connectEvents(session.id);
@@ -937,6 +987,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			toolPreset,
 			modelThinkingLevels,
 			session,
+			browseOnly,
 			agentRunning,
 			connectEvents,
 			onSessionCreated,
@@ -945,6 +996,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 	handleSendRef.current = handleSend;
 
 	const handleAbort = useCallback(async () => {
+		if (browseOnly) return; // 子代理子会话只读，禁止中止
 		const sid = sessionIdRef.current;
 		if (!sid) return;
 		setIsAborting(true);
@@ -954,10 +1006,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			console.error("Failed to abort:", e);
 			setIsAborting(false);
 		}
-	}, []);
+	}, [browseOnly]);
 
 	const handleFork = useCallback(
 		async (entryId: string) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 fork
 			const sid = sessionIdRef.current;
 			if (!sid) return;
 			setForkingEntryId(entryId);
@@ -979,11 +1032,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				setForkingEntryId(null);
 			}
 		},
-		[onSessionForked],
+		[browseOnly, onSessionForked],
 	);
 
 	const handleNavigate = useCallback(
 		async (entryId: string) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 navigate_tree
 			const sid = sessionIdRef.current;
 			if (!sid) return;
 			sendAgentCommand(sid, { type: "navigate_tree", targetId: entryId }).catch(
@@ -992,11 +1046,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			setActiveLeafId(entryId);
 			await loadContext(sid, entryId);
 		},
-		[loadContext],
+		[browseOnly, loadContext],
 	);
 
 	const handleLeafChange = useCallback(
 		async (leafId: string | null) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 navigate_tree
 			setActiveLeafId(leafId);
 			const sid = sessionIdRef.current;
 			if (!sid) return;
@@ -1008,11 +1063,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				}).catch(() => {});
 			}
 		},
-		[loadContext],
+		[browseOnly, loadContext],
 	);
 
 	const handleModelChange = useCallback(
 		async (provider: string, modelId: string) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 set_model
 			if (isNew) {
 				setNewSessionModel({ provider, modelId });
 				return;
@@ -1026,10 +1082,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				console.error("Failed to set model:", e);
 			}
 		},
-		[isNew, setNewSessionModel],
+		[browseOnly, isNew, setNewSessionModel],
 	);
 
 	const handleCompact = useCallback(async () => {
+		if (browseOnly) return; // 子代理子会话只读，禁止 compact
 		const sid = sessionIdRef.current;
 		if (!sid || isCompacting) return;
 		setIsCompacting(true);
@@ -1061,10 +1118,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		} finally {
 			setIsCompacting(false);
 		}
-	}, [isCompacting, loadSession]);
+	}, [browseOnly, isCompacting, loadSession]);
 
 	const handleSteer = useCallback(
 		async (message: string, images?: AttachedImage[]) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 steer
 			const sid = sessionIdRef.current;
 			if (!sid) return;
 			setMessages((prev) => [
@@ -1090,11 +1148,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				console.error("Failed to steer:", e);
 			}
 		},
-		[],
+		[browseOnly],
 	);
 
 	const handleFollowUp = useCallback(
 		async (message: string, images?: AttachedImage[]) => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 follow_up
 			const sid = sessionIdRef.current;
 			if (!sid) return;
 			setMessages((prev) => [
@@ -1120,10 +1179,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				console.error("Failed to follow up:", e);
 			}
 		},
-		[],
+		[browseOnly],
 	);
 
 	const handleAbortCompaction = useCallback(async () => {
+		if (browseOnly) return; // 子代理子会话只读，禁止 abort_compaction
 		const sid = sessionIdRef.current;
 		if (!sid) return;
 		try {
@@ -1131,7 +1191,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		} catch (e) {
 			console.error("Failed to abort compaction:", e);
 		}
-	}, []);
+	}, [browseOnly]);
 
 	/**
 	 * After a Handoff run finishes, create a brand-new session and seed it with the
@@ -1198,6 +1258,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 					modified: new Date().toISOString(),
 					messageCount: 1,
 					firstMessage: pkg,
+					lastMessage: pkg,
 				});
 			} catch (e) {
 				setHandoffError(e instanceof Error ? e.message : String(e));
@@ -1247,6 +1308,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
 	const handleToolPresetChange = useCallback(
 		async (preset: "none" | "default" | "full") => {
+			if (browseOnly) return; // 子代理子会话只读，禁止 set_tools
 			const { PRESET_NONE, PRESET_DEFAULT, PRESET_FULL } = await import(
 				"@/components/ToolPanel"
 			);
@@ -1265,7 +1327,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				console.error("Failed to set tools:", e);
 			}
 		},
-		[setToolPresetState],
+		[browseOnly, setToolPresetState],
 	);
 
 	const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -1295,13 +1357,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		if (session) {
 			sessionIdRef.current = session.id;
 			loadSession(session.id, true, true).then((agentState) => {
-				if (agentState?.running) {
-					loadTools(session.id);
-					if (agentState.state?.isStreaming) {
-						setAgentRunning(true);
-						setAgentPhase({ kind: "waiting_model" });
-						connectEvents(session.id);
+				if (session.browseOnly) {
+					// 子代理子会话：只读实时跟随，绝非可交互 RPC 会话，不建普通事件通道。
+					connectChildEvents(session.id);
+				} else {
+					if (agentState?.running) {
+						loadTools(session.id);
+						if (agentState.state?.isStreaming) {
+							setAgentRunning(true);
+							setAgentPhase({ kind: "waiting_model" });
+						}
 					}
+					// 挂载即无条件建立事件通道，不依赖挂载瞬间 running 快照：多会话并发
+					// 切换时快照可能为 false，据此不建通道会让本会话 question 被服务端缓存
+					// 却永无监听器重放 → 弹窗不触发。服务端对无监听器时的 dialog 有缓冲重放。
+					connectEvents(session.id);
 				}
 				if (agentState?.state) {
 					if (agentState.state.isCompacting !== undefined)
@@ -1317,6 +1387,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 			if (eventSourceRef.current) {
 				eventSourceRef.current.close();
 				eventSourceRef.current = null;
+			}
+			if (childSourceRef.current) {
+				childSourceRef.current.close();
+				childSourceRef.current = null;
 			}
 			if (sseReconnectTimerRef.current) {
 				clearTimeout(sseReconnectTimerRef.current);
@@ -1435,6 +1509,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		sessionStats,
 		agentPhase,
 		isNew,
+		browseOnly,
 		isAborting,
 		sseState,
 		loopWarning,

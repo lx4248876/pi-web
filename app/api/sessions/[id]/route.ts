@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
-import { join } from "path";
+import { statSync, unlinkSync } from "fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionPath,
-  invalidateSessionPathCache,
   buildSessionContext,
   listAllSessions,
+  invalidateSessionPathCache,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
 
@@ -100,49 +99,30 @@ export async function PATCH(
 }
 
 // DELETE /api/sessions/[id]
+// 默认软删除：不真删文件，只停掉活动会话，把“移入回收站”的动作留给前端
+// (前端把 id 记入 trashedSessions 并持久化)，从而归档列表可以随时还原。
+// 带 ?permanent=1 时为彻底删除：从磁盘移除 .jsonl 文件，此后无法再还原。
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const permanent = new URL(req.url).searchParams.get("permanent") === "1";
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    // Read header before deleting to get parentSession path
-    const firstLine = readFileSync(filePath, "utf8").split("\n")[0];
-    let parentSessionPath: string | undefined;
-    try {
-      const header = JSON.parse(firstLine) as { type?: string; parentSession?: string };
-      if (header.type === "session") parentSessionPath = header.parentSession;
-    } catch { /* ignore */ }
-
-    // Re-attach all direct children to this session's parent (cascade re-parent)
-    // Scan sibling files in the same directory
-    const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-    try {
-      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && join(dir, f) !== filePath);
-      for (const file of files) {
-        const childPath = join(dir, file);
-        try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
-          if (header.type === "session" && header.parentSession === filePath) {
-            // Rewrite header with new parentSession
-            header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
-            writeFileSync(childPath, lines.join("\n"));
-          }
-        } catch { /* skip malformed */ }
-      }
-    } catch { /* skip if dir unreadable */ }
-
+    // 停掉仍在运行的活动会话（RPC）。
     getRpcSession(id)?.destroy();
-    unlinkSync(filePath);
-    invalidateSessionPathCache(id);
+
+    if (permanent) {
+      // 真正移除磁盘文件并清掉路径缓存，防止缓存残留让会话“看起来还在”。
+      unlinkSync(filePath);
+      invalidateSessionPathCache(id);
+    }
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ChatWindow } from "./ChatWindow";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
+import { PackagesConfig } from "./PackagesConfig";
 import { useResizablePanel } from "./app-shell/useResizablePanel";
 import { EmptyState } from "./app-shell/EmptyState";
 import { TopBar } from "./app-shell/TopBar";
@@ -14,6 +15,7 @@ import { useTheme } from "@/hooks/useTheme";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { Tab } from "./TabBar";
+import { ArtifactDiffViewer } from "./ArtifactDiffViewer";
 
 export function AppShell() {
   const router = useRouter();
@@ -29,6 +31,7 @@ export function AppShell() {
   const [modelsConfigOpen, setModelsConfigOpen] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [skillsConfigOpen, setSkillsConfigOpen] = useState(false);
+  const [packagesConfigOpen, setPackagesConfigOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const chatInputRef = useRef<ChatInputHandle | null>(null);
@@ -93,6 +96,9 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+
+  // 产物 diff 全屏浮层:点产物触发,显示 HEAD vs 当前改动
+  const [artifactDiff, setArtifactDiff] = useState<{ filePath: string; name: string } | null>(null);
 
   const handleAtMention = useCallback((relativePath: string) => {
     chatInputRef.current?.insertText("`" + relativePath + "`");
@@ -192,7 +198,7 @@ export function AppShell() {
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
     setSelectedSession((prev) => ({
-      ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" }),
+      ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "", lastMessage: "" }),
       id: newSessionId,
     }));
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
@@ -259,6 +265,11 @@ export function AppShell() {
     setActiveFileTabId(gitTabId);
     setRightPanelOpen(true);
   }, [activeFileTabId, rightPanelOpen]);
+
+  // Open a fullscreen diff overlay for a turn's written file (HEAD vs 当前改动)
+  const handleOpenDiff = useCallback((filePath: string, _name: string) => {
+    setArtifactDiff({ filePath, name: _name });
+  }, []);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -336,6 +347,7 @@ export function AppShell() {
           onAtMention={handleAtMention}
           onOpenModels={() => setModelsConfigOpen(true)}
           onOpenSkills={() => setSkillsConfigOpen(true)}
+          onOpenPackages={() => setPackagesConfigOpen(true)}
           skillsDisabled={!activeCwd && !selectedSession?.cwd && !newSessionCwd}
         />
       </div>
@@ -411,6 +423,8 @@ export function AppShell() {
               chatInputRef={chatInputRef}
               onBranchDataChange={handleBranchDataChange}
               onSystemPromptChange={handleSystemPromptChange}
+              onOpenFile={handleOpenFile}
+              onOpenDiff={handleOpenDiff}
             />
           ) : showPlaceholder ? (
             <EmptyState hasCwd={!!activeCwd} />
@@ -439,6 +453,16 @@ export function AppShell() {
     )}
     {skillsConfigOpen && (activeCwd ?? selectedSession?.cwd ?? newSessionCwd) && (
       <SkillsConfig cwd={(activeCwd ?? selectedSession?.cwd ?? newSessionCwd)!} onClose={() => setSkillsConfigOpen(false)} />
+    )}
+    {packagesConfigOpen && (
+      <PackagesConfig onClose={() => setPackagesConfigOpen(false)} />
+    )}
+    {artifactDiff && (
+      <ArtifactDiffViewer
+        filePath={artifactDiff.filePath}
+        cwd={currentCwd ?? undefined}
+        onClose={() => setArtifactDiff(null)}
+      />
     )}
     </>
   );

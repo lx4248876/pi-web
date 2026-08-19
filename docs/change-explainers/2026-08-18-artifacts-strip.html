@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>改动理解：每轮产物横条</title>
+  <style>
+    :root {
+      --border: #e2e8f0;
+      --muted: #64748b;
+      --text: #0f172a;
+      --panel: #f8fafc;
+      --accent: #2563eb;
+      --main: #1e3a8a;
+      --ripple: #b45309;
+      --code-bg: #f1f5f9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+      line-height: 1.65;
+    }
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    h2 { font-size: 18px; margin: 32px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    p { margin: 8px 0; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .badge {
+      display: inline-block; background: var(--accent); color: #fff;
+      border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: 600;
+      margin-right: 8px; vertical-align: middle;
+    }
+    code {
+      background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9em;
+    }
+    .card {
+      border: 1px solid var(--border); border-left-width: 4px; border-radius: 8px;
+      padding: 12px 14px; margin: 10px 0; background: #fff;
+    }
+    .card.main   { border-left-color: var(--main); }
+    .card.ripple { border-left-color: var(--ripple); }
+    .card .tag {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+      margin-right: 8px; text-transform: uppercase;
+    }
+    .card.main .tag   { color: var(--main); }
+    .card.ripple .tag { color: var(--ripple); }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    .flow {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px; font-size: 13px;
+    }
+    .flow .step { background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; }
+    .flow .arrow { color: var(--muted); }
+    ul { padding-left: 22px; }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <h1>改动理解：每轮「产物」横条</h1>
+  <p class="muted"><span class="badge">Standard</span> 生成于 2026-08-18；基于仓库当前只读核实。</p>
+
+  <h2>一句话</h2>
+  <p>
+    每一轮 agent 回答完成时，自动采集该轮里 agent 用 <code>write</code> / <code>edit</code> / <code>multiedit</code>
+    等工具<strong>实际写入或修改过</strong>的文件（去重），在这轮助手消息末尾渲染一条「产物」横条；
+    点文件名直接复用已有文件查看器（<code>RightPanel</code> → <code>FileViewer</code>）打开查看。
+  </p>
+
+  <h2>改动地图</h2>
+
+  <div class="card main">
+    <span class="tag">主改</span><code>components/ChatWindow.tsx</code> · 消息渲染 + 本轮产物采集
+    <p class="muted">给每轮助手消息末尾加产物横条的渲染点，并从该轮消息里提取产物文件路径。</p>
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p>
+        在这轮<strong>最后一条助手消息</strong>渲染完成后，追加一条「产物」横条。采集逻辑顺着该轮
+        （从上一轮用户消息之后到这轮 assistant 消息）扫 <code>toolCall</code> 块：只在
+        <code>toolName</code> 命中写盘工具（<code>write</code>/<code>edit</code>/<code>multiedit</code> 等）时，
+        从 <code>input</code> 里读 <code>path</code> / <code>file_path</code>，按路径去重。
+        用该调用的 <code>toolResult.isError</code> 粗略排除「报错、可能没写成功」的调用，降低误列。
+        横条上的每个文件名点击后调用一个新的 <code>onOpenFile(filePath, fileName)</code>。
+      </p>
+      <p>
+        为什么落在这：文件列表完全来自前端已有的 <code>messages</code>（工具调用本就带路径），无需后端加数据；
+        而整个聊天气泡、滚动、结束时机都由 ChatWindow 统一负责，产物横条作为本轮消息的收尾自然归属这里。
+      </p>
+    </details>
+  </div>
+
+  <div class="card main">
+    <span class="tag">主改</span><code>components/AppShell.tsx</code> · <code>handleOpenFile</code> 下传
+    <p class="muted">把已经存在的打开文件能力接通到 ChatWindow。</p>
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p>
+        AppShell 里已有 <code>handleOpenFile(filePath, fileName)</code>（开标签页 + 弹文件查看器）。
+        给它加一条 prop，通过 <code>&lt;ChatWindow onOpenFile={handleOpenFile} /&gt;</code> 传给聊天区，
+        产品横条点文件名时就能直接复用现有文件查看器，不用新建一套打开逻辑。
+      </p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <span class="tag">波及</span>新增小组件承载横条 UI（例如 <code>components/ArtifactStrip.tsx</code>）
+    <p class="muted">把「产物」横条的展示样式单独成件；也可内联在 ChatWindow，属于实现取舍。</p>
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p>
+        一个很薄的展示组件：接收一份去重后的文件路径数组，渲染成一行小芯片/文件名按钮，点击调
+        <code>onOpenFile</code>。单独成组件便于复用与测试；不包含任何后端或持久化逻辑。
+      </p>
+    </details>
+  </div>
+
+  <div class="card ripple">
+    <span class="tag">波及</span>滚动/自动贴底逻辑
+    <p class="muted">横条会改变本轮消息的高度，需接入既有自动滚动判定。</p>
+    <details>
+      <summary>怎么改 / 为什么</summary>
+      <p>
+        ChatWindow 已按 <code>messages.length / streamState / loading</code> 重新评估滚动与「滚动到底部」按钮，
+        新增横条后把「产物是否变化」并入依赖即可，避免用户在看底部时横条动态插入导致跳动。
+      </p>
+    </details>
+  </div>
+
+  <h2>逻辑链路</h2>
+  <div class="flow">
+    <span class="step">用户发消息</span><span class="arrow">→</span>
+    <span class="step">本轮开始 <code>agent_start</code></span><span class="arrow">→</span>
+    <span class="step">agent 跑写盘工具 <code>write/edit/multiedit</code></span><span class="arrow">→</span>
+    <span class="step">本轮结束 <code>agent_end</code></span><span class="arrow">→</span>
+    <span class="step">ChatWindow 按本轮 <code>toolCall</code> 提取文件路径并去重</span><span class="arrow">→</span>
+    <span class="step">本轮末尾渲染「产物」横条</span><span class="arrow">→</span>
+    <span class="step">点文件名</span><span class="arrow">→</span>
+    <span class="step"><code>AppShell.handleOpenFile</code></span><span class="arrow">→</span>
+    <span class="step"><code>RightPanel → FileViewer</code> 打开该文件</span>
+  </div>
+
+  <h2>改完你应看到</h2>
+  <ul>
+    <li>每轮 agent 回答完成后，末尾出现「产物」横条，列出该轮写入/修改过的文件名（已去重）。</li>
+    <li>点某个文件名，弹出已有的文件查看器（多标签弹窗）并打开该文件，可查看 / 编辑 / diff。</li>
+    <li>纯问答、本轮没写文件的一轮，不显示横条。</li>
+    <li>本轮还在 stream / 运行中（<code>agentRunning</code>）时不显示横条，等本轮真正结束才出现，避免列半成品。</li>
+  </ul>
+
+  <h2>先别动</h2>
+  <ul>
+    <li>不改文件查看器本身（<code>RightPanel</code> / <code>FileViewer</code> / <code>TabBar</code> 已够用，直接复用）。</li>
+    <li>不动后端：不碰 <code>rpc-manager</code>、消息持久化格式、git 状态解析、分支。</li>
+    <li>不做「会话级聚合产物页」——已按你的选择定位到每轮横条。</li>
+    <li>
+      <code>lib/types.ts</code> 尽量不动；路径提取可用 MessageView 里已有的 <code>getToolPreview</code> 同款思路局部实现。
+    </li>
+  </ul>
+
+  <h2>未知与假设</h2>
+  <ul>
+    <li>
+      <strong>未知：</strong>「写盘工具」的精确名单——假定 <code>write</code> / <code>edit</code> / <code>multiedit</code>
+      及同类显式带 <code>file_path</code> 的工具；无法从 input 直接取路径的工具（如 <code>bash</code> 内部写文件、
+      <code>apply_patch</code> 等）先不覆盖。
+    </li>
+    <li>
+      <strong>未知：</strong>代码里没有现成的「文件确实已写盘」标志，只能用该调用的 <code>toolResult.isError</code>
+      粗略排除失败的写入，不是 100% 保证。
+    </li>
+    <li>
+      <strong>假设：</strong>读取现有 <code>messages</code>（来自 .jsonl 历史 + 实时流）即可，不需要后端新增数据；
+      实时流下本轮 <code>toolCall</code> 块在本轮结束时已齐全。
+    </li>
+    <li>
+      <strong>材料：</strong>够——<code>ChatWindow</code> / <code>AppShell</code> / <code>RightPanel</code> /
+      <code>FileViewer</code> / <code>lib/types.ts</code> / <code>MessageView</code> 均已核实存在。
+    </li>
+  </ul>
+</body>
+</html>
