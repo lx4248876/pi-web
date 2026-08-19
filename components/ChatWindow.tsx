@@ -644,7 +644,7 @@ export function ChatWindow({
         isAborting,
         sseState,
         loopWarning,
-        pendingUiRequest,
+        pendingUiRequests,
         uiNotice,
         messagesEndRef,
         scrollContainerRef,
@@ -739,14 +739,14 @@ export function ChatWindow({
         scrollContainerRef,
     ]);
 
-    // Play the ask sound when the agent raises a question/confirm/input dialog.
-    const prevPendingUiRequestRef = useRef<typeof pendingUiRequest>(null);
+    // Play the ask sound when a new dialog raises (queue empty -> non-empty).
+    const prevPendingCountRef = useRef(0);
     useEffect(() => {
-        if (pendingUiRequest && !prevPendingUiRequestRef.current) {
+        if (pendingUiRequests.length > 0 && prevPendingCountRef.current === 0) {
             playAskSoundRef.current();
         }
-        prevPendingUiRequestRef.current = pendingUiRequest;
-    }, [pendingUiRequest]);
+        prevPendingCountRef.current = pendingUiRequests.length;
+    }, [pendingUiRequests.length]);
 
     const onDrop = useCallback(
         (files: File[]) => {
@@ -791,6 +791,7 @@ export function ChatWindow({
             onAbort={handleAbort}
             onSteer={agentRunning ? handleSteer : undefined}
             onFollowUp={agentRunning ? handleFollowUp : undefined}
+            sessionId={session?.id ?? null}
             isStreaming={agentRunning}
             cwd={session?.cwd ?? newSessionCwd ?? null}
             model={displayModelValue}
@@ -1332,12 +1333,13 @@ export function ChatWindow({
                                 </button>
                             </div>
                         )}
-                        {pendingUiRequest && (
+                        {pendingUiRequests.map((req) => (
                             <ExtensionUIDialog
-                                request={pendingUiRequest}
+                                key={req.id}
+                                request={req}
                                 onResponse={handleExtensionUIResponse}
                             />
-                        )}
+                        ))}
                         <TodoStrip details={latestTodos}/>
                         {chatInputElement}
                     </div>

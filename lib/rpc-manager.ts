@@ -58,17 +58,6 @@ type ExtensionRunnerLike = {
 	}>;
 };
 
-function isDialogRequestEvent(event: AgentEvent): boolean {
-	return (
-		event.type === "extension_ui_request" &&
-		(event.method === "select" ||
-			event.method === "confirm" ||
-			event.method === "input" ||
-			event.method === "editor" ||
-			event.method === "multiple")
-	);
-}
-
 const RPC_THEME = new Theme(
 	{
 		accent: "#38bdf8",
@@ -197,17 +186,21 @@ export function createCompatUiTools(): ToolDefinition[] {
 	const executeQuestion = async (
 		_toolCallId: string,
 		rawParams: Record<string, unknown>,
-		signal: AbortSignal | undefined,
+		_signal: AbortSignal | undefined,
 		_onUpdate: unknown,
 		ctx: { ui: ExtensionUIContext },
 	) => {
 		// 多问（questions[] 长度 > 1）：一次弹窗展示全部问题，后端按序拿回答案数组；
 		// 单问走原 select/input 路径不变。
+		//
+		// 刻意不把工具调用的 abort signal 传下去：question 的语义是「必须由人来答」。
+		// 若因模型/回合中断导致 signal 提前 abort，createDialogPromise 会在入口静默
+		// resolve 掉、连请求都不 emit（弹窗永不出现），或在中途移除 pending——都违背
+		// 「未答的问题必须弹窗」这一铁律。每次都先把弹窗发出去并保持 pending，直到
+		// 用户作答；会话 wrapper 销毁时 pending 自会消失，不会永久孤儿。
 		const parts = resolveQuestionParts(rawParams);
 		if (parts.length > 1) {
-			const answers = await (ctx.ui as UiContextWithMultiple).multiple(parts, {
-				signal,
-			});
+			const answers = await (ctx.ui as UiContextWithMultiple).multiple(parts);
 			if (answers === undefined) return textResult("User cancelled.");
 			const lines = parts.map(
 				(part, i) => `${part.question} -> ${answers[i] ?? ""}`,
@@ -218,8 +211,8 @@ export function createCompatUiTools(): ToolDefinition[] {
 		const part = parts[0];
 		const value =
 			part.options.length > 0
-				? await ctx.ui.select(part.question, part.options, { signal })
-				: await ctx.ui.input(part.question, part.placeholder, { signal });
+				? await ctx.ui.select(part.question, part.options)
+				: await ctx.ui.input(part.question, part.placeholder);
 
 		if (value === undefined) return textResult("User cancelled.");
 		return textResult(
@@ -260,8 +253,6 @@ type UiContextWithMultiple = ExtensionUIContext & {
 
 export class AgentSessionWrapper {
 	private listeners: EventListener[] = [];
-	private eventBuffer: AgentEvent[] = [];
-	private readonly EVENT_BUFFER_SIZE = 100;
 	private unsubscribe: (() => void) | null = null;
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private onDestroyCallback: (() => void) | null = null;
@@ -289,6 +280,13 @@ export class AgentSessionWrapper {
 
 	isAlive(): boolean {
 		return this._alive;
+	}
+
+	/** 仍等人在答的弹窗请求，供“有未答问题”徽标查询。 */
+	get pendingDialogs(): AgentEvent[] {
+		return Array.from(this.pendingExtensionRequests.values()).map(
+			(p) => p.requestEvent,
+		);
 	}
 
 	/**
@@ -355,17 +353,7 @@ export class AgentSessionWrapper {
 	emit(event: AgentEvent): void {
 		void event; // 事件本体不用于列表通知；见 notifySessionListListeners 的节流逻辑
 		this.notifySessionListListeners();
-		const hadListeners = this.listeners.length > 0;
 		for (const l of this.listeners) l(event);
-		// 当没有在线监听器时（例如前端正在重连或新会话刚启动尚未建立 SSE），
-		// 缓存需要用户交互的 dialog 请求，等下一个监听器连上时回放，避免问题弹窗
-		// 在“后端已发、前端未连”的窗口期丢失，导致统一按“用户拒绝”处理。
-		if (!hadListeners && isDialogRequestEvent(event)) {
-			this.eventBuffer.push(event);
-			if (this.eventBuffer.length > this.EVENT_BUFFER_SIZE) {
-				this.eventBuffer.shift();
-			}
-		}
 	}
 
 	private createDialogPromise<T>(
@@ -752,39 +740,24 @@ export class AgentSessionWrapper {
 	}
 
 	onEvent(listener: EventListener): () => void {
-		// 新监听器连上时，立即回放断开期间缓存且仍在等待用户回答的 dialog 请求。
-		const bufferedIds = new Set<string>();
-		for (const event of this.eventBuffer) {
-			const id = event.id as string | undefined;
-			if (id && this.pendingExtensionRequests.has(id)) {
-				bufferedIds.add(id);
-				listener(event);
-			}
+		// 新监听器连上时，把「所有仍等答的弹窗请求」重放给它。
+		//
+		// 以 pendingExtensionRequests（未答问题的权威集合）为准，而不是依赖 eventBuffer：
+		// 一个问题若在「有监听器」时 live 投递，根本不会进缓冲；只有「最后一个监听器断开」
+		// 那次重缓存才捞它。刷新/切换会话时若旧连接没有干净摘掉、新监听器就已挂上，
+		// 该未答问题就既不在缓冲、又被新监听器错过 → 徽标在但点进去不弹。直接从权威集合
+		// 重放，无论它此前是缓冲缓存还是 live 投递，只要还等答，新监听器就一定收到。
+		const delivered = new Set<string>();
+		for (const [id, pending] of this.pendingExtensionRequests) {
+			if (delivered.has(id)) continue;
+			delivered.add(id);
+			listener(pending.requestEvent);
 		}
-		this.eventBuffer = this.eventBuffer.filter((event) => {
-			const id = event.id as string | undefined;
-			return id ? !bufferedIds.has(id) : false;
-		});
 
 		this.listeners.push(listener);
 		return () => {
 			const i = this.listeners.indexOf(listener);
 			if (i !== -1) this.listeners.splice(i, 1);
-			// 当最后一个监听器断开时，把当前仍在等待回答的 dialog 请求重新缓存，
-			// 这样前端重连/重新挂载后仍能收到弹窗。
-			if (this.listeners.length === 0) {
-				const bufferedIdSet = new Set(
-					this.eventBuffer.map((event) => event.id as string),
-				);
-				for (const [id, pending] of this.pendingExtensionRequests) {
-					if (!bufferedIdSet.has(id)) {
-						this.eventBuffer.push(pending.requestEvent);
-					}
-				}
-				if (this.eventBuffer.length > this.EVENT_BUFFER_SIZE) {
-					this.eventBuffer = this.eventBuffer.slice(-this.EVENT_BUFFER_SIZE);
-				}
-			}
 		};
 	}
 
@@ -1116,6 +1089,31 @@ export function getActiveRpcSessionIds(): Set<string> {
     if (wrapper.inner.isStreaming) ids.add(id);
   }
   return ids;
+}
+
+/**
+ * 有“未答问题”的会话（供侧边栏徽标，非打断式）。
+ * 两个会话都挂着未答 question 时，刷新页面后也能从这拿到全部，
+ * 不会让任何一个看起来“没了”。
+ */
+export function getAllPendingDialogs(): Array<{
+	sessionId: string;
+	request: AgentEvent;
+}>
+{
+	const out: Array<{ sessionId: string; request: AgentEvent }> = [];
+	for (const [sessionId, wrapper] of getRegistry()) {
+		// 防御热重载错配：registry 里的 wrapper 可能是旧代码生成的实例，没有
+		// pendingDialogs getter（undefined）。跳过而非抛错。
+		const dialogs = (wrapper as {
+			pendingDialogs?: AgentEvent[];
+		}).pendingDialogs;
+		if (!Array.isArray(dialogs)) continue;
+		for (const request of dialogs) {
+			out.push({ sessionId, request });
+		}
+	}
+	return out;
 }
 
 // ─── 会话列表变更订阅（供 /api/sessions/events SSE 推送） ─────────────────────

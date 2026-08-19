@@ -28,6 +28,8 @@ interface Props {
 	onAtMention?: (relativePath: string) => void;
 	// Session currently streaming; its terminal dot is suppressed while running.
 	runningSessionId?: string | null;
+	// 有「未答 question」的会话（侧边栏小徽标，非打断式）。
+	pendingSessionIds?: ReadonlySet<string>;
 }
 
 interface BrowseDirEntry {
@@ -316,6 +318,7 @@ export function SessionSidebar({
 	explorerRefreshKey,
 	onAtMention,
 	runningSessionId,
+	pendingSessionIds,
 }: Props) {
 	const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
 	const [loading, setLoading] = useState(true);
@@ -2208,6 +2211,7 @@ export function SessionSidebar({
 												selectedSessionId={selectedSessionId}
 												onSelectSession={handleSessionSelect}
 												runningSessionId={runningSessionId}
+												pendingSessionIds={pendingSessionIds}
 												seenAt={seenAt}
 												onRenamed={loadSessions}
 												onSessionDeleted={(id, cwd) => {
@@ -2973,6 +2977,7 @@ function SessionTreeItem({
 	runningSessionId,
 	seenAt,
 	depth,
+	pendingSessionIds,
 }: {
 	node: SessionTreeNode;
 	selectedSessionId: string | null;
@@ -2982,6 +2987,7 @@ function SessionTreeItem({
 	runningSessionId?: string | null;
 	seenAt?: Record<string, string>;
 	depth: number;
+	pendingSessionIds?: ReadonlySet<string>;
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const hasChildren = node.children.length > 0;
@@ -3015,23 +3021,25 @@ function SessionTreeItem({
 					hasChildren={hasChildren}
 					collapsed={collapsed}
 					onToggleCollapse={() => setCollapsed((v) => !v)}
+					pendingSessionIds={pendingSessionIds}
 				/>
 			</div>
 			{hasChildren && !collapsed && (
 				<div>
-					{node.children.map((child) => (
-						<SessionTreeItem
-							key={child.session.id}
-							node={child}
-							selectedSessionId={selectedSessionId}
-							onSelectSession={onSelectSession}
-							onRenamed={onRenamed}
-							onSessionDeleted={onSessionDeleted}
-							runningSessionId={runningSessionId}
-							seenAt={seenAt}
-							depth={depth + 1}
-						/>
-					))}
+						{node.children.map((child) => (
+							<SessionTreeItem
+								key={child.session.id}
+								node={child}
+								selectedSessionId={selectedSessionId}
+								onSelectSession={onSelectSession}
+								onRenamed={onRenamed}
+								onSessionDeleted={onSessionDeleted}
+								runningSessionId={runningSessionId}
+								seenAt={seenAt}
+								depth={depth + 1}
+								pendingSessionIds={pendingSessionIds}
+							/>
+						))}
 				</div>
 			)}
 		</div>
@@ -3086,6 +3094,7 @@ function SessionItem({
 	hasChildren = false,
 	collapsed = false,
 	onToggleCollapse,
+	pendingSessionIds,
 }: {
 	session: SessionInfo;
 	isSelected: boolean;
@@ -3098,6 +3107,7 @@ function SessionItem({
 	hasChildren?: boolean;
 	collapsed?: boolean;
 	onToggleCollapse?: () => void;
+	pendingSessionIds?: ReadonlySet<string>;
 }) {
 	const [hovered, setHovered] = useState(false);
 	const [renaming, setRenaming] = useState(false);
@@ -3346,16 +3356,20 @@ function SessionItem({
 					    (authoritative running-ids set, so background/switched-away sessions get a
 					    stable spinner regardless of selection/seenAt), or while streaming in this
 					    tab (instant front-end fast-path). Terminal green/red show only for
-					    done/failed sessions with an unviewed result. */}
-					{session.id === runningSessionId || session.status === "running" ? (
-						<SessionStatusDot status="running" />
-					) : (
-						session.status &&
-						!isSelected &&
-						session.modified > (seenAt[session.id] ?? "") && (
-							<SessionStatusDot status={session.status} />
-						)
-					)}
+					    done/failed sessions with an unviewed result. Reserved-width slot keeps the
+					    row from shifting left/right as the dot appears, disappears, or changes
+					    between spinner (10px) and terminal dot (7px). */}
+					<div style={{ width: 12, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+						{session.id === runningSessionId || session.status === "running" ? (
+							<SessionStatusDot status="running" />
+						) : (
+							session.status &&
+							!isSelected &&
+							session.modified > (seenAt[session.id] ?? "") && (
+								<SessionStatusDot status={session.status} />
+							)
+						)}
+					</div>
 					<div style={{ flex: 1, minWidth: 0 }}>
 						<div
 							style={{
@@ -3370,6 +3384,23 @@ function SessionItem({
 							title={title}
 						>
 							{title}
+							{pendingSessionIds?.has(session.id) && (
+								<span
+									title="有未回答的问题，点进来即可作答"
+									style={{
+										marginLeft: 6,
+										flexShrink: 0,
+										fontSize: 10,
+										lineHeight: "14px",
+										padding: "0 5px",
+										borderRadius: 8,
+										background: "var(--accent)",
+										color: "#fff",
+									}}
+								>
+									待答
+								</span>
+							)}
 						</div>
 						<div
 							style={{

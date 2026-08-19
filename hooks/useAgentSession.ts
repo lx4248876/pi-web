@@ -6,6 +6,7 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { appendCompletedMessage } from "@/lib/agent-message-merge";
 import { shouldReconnect } from "@/lib/event-channel";
+import { pushPendingDialog, removePendingDialog } from "@/lib/pending-dialogs";
 import type { ToolEntry } from "@/components/ToolPanel";
 
 export interface SessionData {
@@ -311,10 +312,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		message: string;
 		count: number;
 	} | null>(null);
-	const [pendingUiRequest, setPendingUiRequest] = useState<Extract<
-		ExtensionUIRequest,
-		{ method: "select" | "confirm" | "input" | "editor" | "multiple" }
-	> | null>(null);
+	const [pendingUiRequests, setPendingUiRequests] = useState<Array<
+		Extract<
+			ExtensionUIRequest,
+			{ method: "select" | "confirm" | "input" | "editor" | "multiple" }
+		>
+	>>([]);
 	const [uiNotice, setUiNotice] = useState<{
 		message: string;
 		type?: "info" | "warning" | "error";
@@ -804,7 +807,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 				case "extension_ui_request": {
 					const request = event as ExtensionUIRequest;
 					if (isDialogUiRequest(request)) {
-						setPendingUiRequest(request);
+						// 入队而非覆盖：未答弹窗绝不被新请求顶掉，作答后才按 id 移除。
+						setPendingUiRequests((prev) =>
+							pushPendingDialog(prev, request),
+						);
 						break;
 					}
 					if (request.method === "notify") {
@@ -1296,14 +1302,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		async (response: ExtensionUIResponse) => {
 			const sid = sessionIdRef.current;
 			if (!sid) return;
-			if (pendingUiRequest?.id === response.id) setPendingUiRequest(null);
+			// 先确保答案送达服务器、再从队列移除：若删在前 POST 又失败，弹窗就没了而问题
+			// 仍在服务器等答——违背「有未答问题就必须弹窗」。成功后才移除，失败则保留
+			// 弹窗让用户可重试。
 			try {
 				await sendAgentCommand(sid, response);
+				setPendingUiRequests((prev) => removePendingDialog(prev, response.id));
 			} catch (e) {
 				console.error("Failed to send extension UI response:", e);
 			}
 		},
-		[pendingUiRequest?.id],
+		[],
 	);
 
 	const handleToolPresetChange = useCallback(
@@ -1513,7 +1522,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		isAborting,
 		sseState,
 		loopWarning,
-		pendingUiRequest,
+		pendingUiRequests,
 		uiNotice,
 		// Refs
 		sessionIdRef,

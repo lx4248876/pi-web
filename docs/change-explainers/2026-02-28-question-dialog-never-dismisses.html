@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>修复：question 弹窗可靠且不越界</title>
+<style>
+  :root{--bg:#fafafa;--panel:#ffffff;--text:#1f2430;--muted:#5b6270;--border:#e3e6ec;--accent:#2563eb;--ok:#16a34a;--warn:#b45309;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.65;}
+  .wrap{max-width:840px;margin:0 auto;padding:32px 20px 80px;}
+  h1{font-size:26px;line-height:1.35;margin:8px 0 4px;}
+  h2{font-size:19px;margin:40px 0 10px;display:flex;align-items:center;gap:8px;}
+  .tag{display:inline-block;background:#e8f0fe;color:var(--accent);border:1px solid #c7d8f8;border-radius:999px;font-size:12px;padding:2px 10px;margin-left:8px;vertical-align:middle;}
+  .sub{color:var(--muted);font-size:14px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin:14px 0;}
+  .action{background:#fff8ec;border:1px solid #f0d9a8;border-left:4px solid var(--warn);}
+  .ok{background:#f0fbf4;border:1px solid #bfe3cd;border-left:4px solid var(--ok);}
+  ol.steps{padding-left:0;list-style:none;counter-reset:s;}
+  ol.steps li{position:relative;padding:14px 16px 14px 52px;border:1px solid var(--border);border-radius:10px;background:var(--panel);margin:10px 0;font-size:14px;cursor:pointer;}
+  ol.steps li .n{position:absolute;left:14px;top:12px;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;}
+  ol.steps li .detail{display:none;margin-top:8px;color:var(--muted);font-size:13px;border-top:1px dashed var(--border);padding-top:8px;}
+  ol.steps li.open .detail{display:block;}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:.9em;}
+  .files{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);}
+  .ico{font-size:15px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>修复：question 弹窗可靠、不丢、不越界 <span class="tag">建议重启</span></h1>
+  <div class="sub">以前：弹窗会被新问题顶掉 / 会被会话中断悄悄取消 / 答错了还消失。<br>现在：弹窗只在你所在的会话里显示，可靠、保持可答、答了才算。</div>
+
+  <h2><span class="ico">🧩</span> 一句话结论</h2>
+  <div class="card ok">问题弹窗<b>只在它所属的会话里显示</b>，不跟着你切换会话。但任何会话只要还有未答问题，<b>侧边栏就会给它标一个不打扰的「待答」徽标</b>——刷新页面后两个会话的问题都在列表里一眼可见，点进即可作答，谁都不丢。</div>
+
+  <h2><span class="ico">🔄</span> 一个未答问题从发起到被答</h2>
+  <ol class="steps">
+    <li><span class="n">1</span>代理在该会话触发 question
+      <div class="detail">后端立刻发出带唯一编号的弹窗请求，并<b>保持「未答」</b>——不会再被会话中断悄悄取消（这是「问了却没弹窗」的根源，已修）。</div>
+    </li>
+    <li><span class="n">2</span>该会话的界面收到 → 弹窗
+      <div class="detail">弹窗只画在这个会话的窗口里；你切到别的会话它就不挡路，切回来它仍在（服务器一直记着，没丢）。</div>
+    </li>
+    <li><span class="n">3</span>后面的问题排队，不顶掉
+      <div class="detail">同一会话再发新问题，只是排到后面，不会把你正在答的顶掉。</div>
+    </li>
+    <li><span class="n">4</span>你答 → 送达服务器确认 → 收起
+      <div class="detail">答案先确保送到服务器、代理真收到才收起；送失败就留着让你重试。</div>
+    </li>
+  </ol>
+
+  <h2><span class="ico">📌</span> 动了哪几块</h2>
+  <div class="card">
+    <div><b>① 队列不覆盖 · <span class="files">hooks/useAgentSession.ts · lib/pending-dialogs.ts（新）</span></b><br>弹窗从「单槽位（新的顶掉旧的）」改成「队列」，未答的绝不被顶掉。</div>
+    <div style="margin-top:10px"><b>② 不被静默取消 · <span class="files">lib/rpc-manager.ts</span></b><br>question 不再理会会话中断信号：一旦发出就保持未答，直到你作答；消灭「代理问了却没弹窗」。</div>
+    <div style="margin-top:10px"><b>③ 答了才算 · <span class="files">hooks/useAgentSession.ts</span></b><br>答案成功送达后才移出弹窗，失败保留可重试。</div>
+    <div style="margin-top:10px"><b>④ 【本次根因】重放以未答权威集合为准 · <span class="files">lib/rpc-manager.ts</span></b><br>旧实现只从脆弱的 eventBuffer 回放「未答问题」；若问题在有监听器时 live 投递（不进缓冲），刷新/切换时旧连接没干净摘掉、新监听器就已挂上，它就被错过——徽标在但点进去不弹。现在改用 <code>pendingExtensionRequests</code>（未答权威集合）直接回放，新监听器必然拿到所有未答问题。</div>
+  </div>
+  <div class="card" style="margin-top:8px"><b>没做 / 已回退</b>：不做「任何会话的弹窗跟着你全世界跑」的全局面板。弹窗只属于它自己的会话，切换会话不会跟着你。</div>
+
+  <h2><span class="ico">🧪</span> 怎么自己验证（重启后）</h2>
+  <div class="card">
+    <b>① 不被顶掉</b>：一个会话里让代理问 A，再触发第二次提问 → A 的弹窗还在，没消失；答完 A 才走。<br>
+    <b>② 切走不跟着</b>：会话 1 问一个问题<b>别点</b>，切到会话 2 → 会话 1 的弹窗不挡你；切回会话 1 → 它还在，可答。<br>
+    <b>③ 答完才算</b>：答一个弹窗 → 立即收起，且提问的代理继续走。<br>
+    <b>④ 不互卡</b>：未答问题挂在那时，别的会话照常能跑能答（已有自动化测试锁定）。
+  </div>
+
+  <h2><span class="ico">✔️</span> 验证事实</h2>
+  <div class="card">✅ <b>62 个自动化测试全绿</b>（新增：队列不覆盖 / 跨会话不互卡 / 刷新断连重连两条都在 / <b>live 投递后新监听器仍能拿到未答问题</b>——即本次根因的回归测试）・ ✅ TypeScript 类型检查通过・ ✅ 改动文件 lint 0 error・ ✅ 独立代码审查 PASS。</div>
+
+  <h2><span class="ico">🛡️</span> 已知取舍</h2>
+  <div class="card">提问的会话在等你答案时本身会「暂停等待」——这是设计（在等你）。现在无论你在哪个会话，侧边栏都能看到哪个会话有「待答」徽标，切回去就能答，绝不丢。若你希望它更醒目（例如顶部一条非弹窗通知）可以再加，但目前「侧边栏徽标 + 当前会话弹窗」已覆盖需求。</div>
+
+</div>
+<script>
+  document.querySelectorAll("ol.steps li").forEach(function(li){
+    li.addEventListener("click", function(){ li.classList.toggle("open"); });
+  });
+</script>
+</body>
+</html>

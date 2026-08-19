@@ -12,6 +12,7 @@ import { TopBar } from "./app-shell/TopBar";
 import { RightPanel } from "./app-shell/RightPanel";
 import { SidebarPanel } from "./app-shell/SidebarPanel";
 import { useTheme } from "@/hooks/useTheme";
+import { usePendingSessionIds } from "@/hooks/usePendingSessionIds";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { Tab } from "./TabBar";
@@ -24,6 +25,8 @@ export function AppShell() {
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
+  // 哪些会话有「未答 question」——侧边栏显示“待答”徽标（非打扰式）。
+  const pendingSessionIds = usePendingSessionIds();
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
@@ -46,6 +49,7 @@ export function AppShell() {
     min: 220, max: 520,
     computeWidth: (clientX, rect) => clientX - rect.left,
     defaultWidth: 260,
+    storageKey: "pi-sidebar-width",
     cssVarTargetSelector: ".sidebar-container",
     cssVarName: "--sidebar-width",
   });
@@ -336,6 +340,7 @@ export function AppShell() {
           selectedSessionId={selectedSession?.id ?? null}
           onSelectSession={handleSelectSession}
           runningSessionId={runningSessionId}
+          pendingSessionIds={pendingSessionIds}
           onNewSession={handleNewSession}
           initialSessionId={initialSessionId}
           onInitialRestoreDone={handleInitialRestoreDone}
