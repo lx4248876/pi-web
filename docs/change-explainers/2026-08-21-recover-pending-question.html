@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>修复：未答问题弹窗不再因进程重启而丢失</title>
+<style>
+  :root{
+    --bg:#fafafa; --card:#ffffff; --border:#e2e2e2; --text:#222; --muted:#666;
+    --accent:#2b6cb0; --accent-weak:#e8f0fa; --ok:#1a7f37; --code:#f4f4f4; --code-tx:#c7254e;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.6;}
+  .wrap{max-width:880px;margin:0 auto;padding:24px 16px 80px;}
+  h1{font-size:1.5rem;margin:8px 0 4px;}
+  h2{font-size:1.15rem;margin:36px 0 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding-bottom:6px;}
+  .tldr{background:var(--accent-weak);border:1px solid #c8ddf3;border-radius:10px;padding:14px 16px;margin:12px 0;}
+  .tldr b{color:var(--accent);}
+  code{background:var(--code);color:var(--code-tx);padding:1px 5px;border-radius:4px;font-size:.9em;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:10px 0;}
+  .muted{color:var(--muted);font-size:.92em;}
+  .step{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px;margin:8px 0;cursor:pointer;transition:background .15s;}
+  .step:hover{background:#f4f8fd;}
+  .step .head{font-weight:600;display:flex;align-items:center;gap:8px;}
+  .step .body{display:none;margin-top:8px;color:var(--muted);}
+  .step.open .body{display:block;}
+  .badge{display:inline-block;padding:1px 8px;border-radius:20px;font-size:.78em;font-weight:600;}
+  .b-ok{background:#e6f4ea;color:var(--ok);border:1px solid #b7e1c3;}
+  .b-warn{background:#fff4e0;color:#9a6700;border:1px solid #ffd98a;}
+  details{border:1px solid var(--border);border-radius:8px;background:var(--card);margin:6px 0;}
+  summary{cursor:pointer;padding:10px 14px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  details pre{background:#1f2430;color:#e6e6e6;border-radius:0 0 8px 8px;padding:12px 14px;overflow-x:auto;margin:0;font-size:.82em;line-height:1.5;}
+  button{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 12px;cursor:pointer;font-size:.9em;color:var(--accent);}
+  button:hover{border-color:var(--accent);}
+  .copy-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .file{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.82em;color:var(--muted);}
+  ul{margin:6px 0;padding-left:22px;} li{margin:4px 0;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔧 未答问题弹窗不再因进程重启而消失</h1>
+  <p class="muted">改的是会话查看器（pi-web）里「提问弹窗」的恢复机制 — 2026-08-21</p>
+
+  <div class="tldr">
+    💡 <b>一句话结论</b>：以前，一个会话在「问了一个问题、还没等你回答」时若被关闭或重启，那个问题弹窗就<b>永久不见了</b>，即使你再次打开这个会话也看不到它、答不了它。<br>
+    <b>现在</b>：再次打开这个会话时，系统会自动把那个没答的问题重新弹出来，你回答后答案会真实写回历史里，不会丢失。
+  </div>
+
+  <h2>🧩 用生活类比理解</h2>
+  <div class="card">
+    想象一个餐厅点单小票（会话文件）。服务员口头问「先生请问加辣吗？」（把问题<b>记在小票上</b>），然后有一个「待应答」的小铃铛（弹窗）一直挂在墙上提醒。<br>
+    <b>问题在哪</b>：这个小铃铛是<b>插在电源插座上的电子牌</b>（内存）——一旦餐厅<b>停电/重启</b>（进程重启），电子牌就灭了；小票上明明还写着「加辣吗」，可是没人再照着它把问题重新挂起来，于是这个没答的问题就被彻底忘了。<br>
+    <b>修复</b>：重启后，店员会<b>重新看小票</b>（会话文件），发现上面还有个没答的「加辣吗」，就手动把铃铛重新挂上。你回答了，店员把它记回小票（写入历史），以后就不会再重复问。
+  </div>
+
+  <h2>🔍 人话链路：一次完整发生了什么</h2>
+  <div class="step open">
+    <div class="head">① 会话提问</div>
+    <div class="body">
+      助手要向用户提问时，会写一条<code>question</code>工具调用记进会话文件，并同时<code>弹一个待答弹窗</code>。弹窗本身是<b>内存状态</b>，只活在当前运行中的程序里。
+    </div>
+  </div>
+  <div class="step">
+    <div class="head">② 进程重启 / 关闭（旧 bug 触发点）</div>
+    <div class="body">
+      如果程序在这个问题还没被回答时就退出了，内存里的弹窗随之消失。会话文件里那条「没答的问题」还在，但没有任何机制去读它再弹出来 —— 问题<b>看起来被永久吞掉了</b>。
+    </div>
+  </div>
+  <div class="step">
+    <div class="head">③ 重新打开会话（新行为）</div>
+    <div class="body">
+      现在重新打开这个会话时，系统<b>扫描会话文件当前结尾</b>：若最后一条是「还没有对应回答的提问」，就把它重新恢复成一个弹窗（有选项→选择框；纯文字→输入框）。
+    </div>
+  </div>
+  <div class="step">
+    <div class="head">④ 你回答问题后</div>
+    <div class="body">
+      你的答案会被<b>当作一条普通用户消息写回会话历史</b>（持久化，不再丢）。因为答案成了新的「最后一条」，下次再打开时系统看到结尾已是回答而不是问题，<b>不会重复弹同一个问题</b>。
+    </div>
+  </div>
+
+  <h2>📁 动了哪几块</h2>
+  <div class="grid">
+    <div class="card"><b>读出「未答问题」</b> <span class="file">lib/session-reader.ts</span><br><span class="muted">新增一个纯函数：从会话记录里判断当前结尾是否停在一个没答的问题上，并把它整理成弹窗需要的格式。可单独测试。</span></div>
+    <div class="card"><b>恢复弹窗 + 落盘答案</b> <span class="file">lib/rpc-manager.ts</span><br><span class="muted">打开会话时调用上面的函数；把恢复出的等待弹窗重新注入；你回答后把答案写进会话历史。</span></div>
+    <div class="card"><b>自动化测试</b> <span class="file">tests/rehydrate-question.test.ts</span><br><span class="muted">7 条单测覆盖：识别悬空提问、已答的不再识别、中间历史不重复弹、空记录等。</span></div>
+  </div>
+
+  <h2>🧪 怎么亲手验证</h2>
+  <div class="card copy-row">
+    <code>npm test</code>
+    <button onclick="copyCmd(this)">📋 复制</button>
+    <span class="muted file">应看到 42 + 70 条测试全部通过（含新增 7 条）。</span>
+  </div>
+  <div class="card copy-row">
+    <code>node --import jiti/register --test tests/rehydrate-question.test.ts</code>
+    <button onclick="copyCmd(this)">📋 复制</button>
+    <span class="muted file">单独跑新增的恢复测试 — 7 条全绿。</span>
+  </div>
+  <p class="muted">功能层面：把一个「问到一半就关掉/重启」的会话再次打开，那个未答问题应重新作为弹窗出现；回答后答案进入历史且不再重复问。</p>
+
+  <h2>📜 看改动代码（点开才显示）</h2>
+  <details>
+    <summary>▶ 新增：读出未答问题 <span class="badge b-ok">session-reader.ts</span></summary>
+    <pre>export function resolveLeafUnansweredQuestion(entries: SessionEntry[]): RehydratedQuestion | null {
+  const resolved = new Set&lt;string&gt;();
+  let lastMessage: SessionEntry | undefined;
+  for (const e of entries) {
+    if (e.type !== "message") continue;
+    const msg = (e as SessionMessageEntry).message;
+    if (msg.role === "toolResult" && (msg as ToolResultMessage).toolCallId) {
+      resolved.add((msg as ToolResultMessage).toolCallId);
+    }
+    lastMessage = e;
+  }
+  if (!lastMessage) return null;
+  const lm = (lastMessage as SessionMessageEntry).message;
+  if (lm.role !== "assistant") return null;
+  const content = Array.isArray(lm.content) ? lm.content : [];
+  for (const rawBlock of content) {
+    const block = rawBlock as unknown as Record&lt;string, unknown&gt; | null;
+    if (!block || block.type !== "toolCall") continue;
+    const toolName = blockField(block, ["toolName", "name"]);
+    const toolCallId = blockField(block, ["toolCallId", "id"]);
+    if (toolName !== "question" || typeof toolCallId !== "string") continue;
+    if (resolved.has(toolCallId)) continue;
+    const rawArgs = blockField(block, ["input", "arguments"]);
+    const params = rawArgs &amp;&amp; typeof rawArgs === "object" &amp;&amp; !Array.isArray(rawArgs) ? rawArgs : {};
+    const parts = resolveQuestionParts(params);
+    if (parts.length !== 1) continue;
+    const part = parts[0];
+    const method = part.options.length &gt; 0 ? "select" : "input";
+    return { toolCallId, request: { method, title: part.title, question: part.question,
+      placeholder: part.placeholder, ...(method === "select" ? { options: part.options } : {}) } };
+  }
+  return null;
+}</pre>
+  </details>
+  <details>
+    <summary>▶ 打开会话时恢复弹窗 + 作答落盘 <span class="badge b-ok">rpc-manager.ts</span></summary>
+    <pre>// 在 startRpcSession 里，wrapper.start() 之后：
+try {
+  const sm = wrapper.inner.sessionManager;
+  const entries = sm.getEntries?.();
+  if (entries) {
+    const recovered = resolveLeafUnansweredQuestion(entries);
+    if (recovered) wrapper.rehydrateUnansweredQuestion(recovered);
+  }
+} catch (err) {
+  console.error("[rpc-manager] recover pending question failed:", err);
+}
+
+// 新方法：注入等待弹窗 + 回答时写一条 user 消息落盘
+rehydrateUnansweredQuestion(recovered) {
+  const id = `rehydrate:${recovered.toolCallId}`;
+  const requestEvent = { type: "extension_ui_request", id,
+    method: recovered.request.method, title: recovered.request.title,
+    question: recovered.request.question, placeholder: recovered.request.placeholder,
+    ...(recovered.request.options ? { options: recovered.request.options } : {}) };
+  this.pendingExtensionRequests.set(id, {
+    requestEvent,
+    resolve: (response) =&gt; {
+      this.pendingExtensionRequests.delete(id);
+      const answer = response &amp;&amp; "value" in response ? response.value : undefined;
+      if (answer === undefined || answer === null) return; // 取消/空答：不落盘，下次仍恢复
+      try {
+        sessionManager.appendMessage({ role: "user",
+          content: [{ type: "text", text: String(answer) }] }); // 答案写入会话历史
+      } catch (err) { console.error("[rpc-manager] append recovered answer failed:", err); }
+    },
+    reject: () =&gt; this.pendingExtensionRequests.delete(id),
+  });
+}</pre>
+  </details>
+
+  <h2>🚧 没动什么 / 已知边界</h2>
+  <div class="card">
+    <ul>
+      <li><b>不自动继续</b>：恢复弹窗只是把问题重新摆出来让你回答，<b>不会擅自让 AI 接着跑</b>；答完后由你正常发下一条开始。</li>
+      <li><b>不伪造结果</b>：不往会话里硬塞一个虚假的「工具结果」，避免污染历史；答案以「用户消息」形式落盘。</li>
+      <li><b>只恢复当前结尾的悬空问题</b>：更早历史里的旧问题不会被反复考古重弹。</li>
+      <li><b>一条消息里同时问多个问题</b>：会整体恢复成一次「多问弹窗」，逐问作答后一并写回历史。</li>
+      <li>恢复失败不会影响会话打开，仅损失一次恢复机会（有日志）。</li>
+    </ul>
+  </div>
+
+  <h2>✅ 验证事实</h2>
+  <div class="card">
+    <ul>
+      <li>类型检查 <code>tsc --noEmit</code>：通过。</li>
+      <li>全量测试 <code>npm test</code>：42（原生 .mjs）+ 70（.ts 经 jiti），共 112 条，<b>0 失败</b>（含新增 7 条）。</li>
+      <li>用真实会话文件（<code>SessionManager.open</code>）验证：能正确识别到当前结尾那个还没答的「引擎归桶口径确认」问题，并还原成选择框。</li>
+      <li>Lint：改动文件无新增问题。</li>
+    </ul>
+  </div>
+
+  <p class="muted" style="margin-top:30px">本页为单文件讲解，内联样式与脚本，可离线打开，无需联网。</p>
+</div>
+<script>
+  function copyCmd(btn){const codeEl=btn.previousElementSibling;const t=codeEl.textContent;navigator.clipboard.writeText(t).then(()=>{const o=btn.textContent;btn.textContent="✅ 已复制";setTimeout(()=>btn.textContent=o,1200);});}
+  document.querySelectorAll('.step').forEach(s=>s.addEventListener('click',()=>s.classList.toggle('open')));
+</script>
+</body>
+</html>

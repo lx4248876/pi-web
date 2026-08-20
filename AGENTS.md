@@ -69,7 +69,19 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Git status parsing must use `git -c core.quotePath=false status -s`. Do not trim lines before reading the two-character status prefix.
 - When refreshing git status, rebuild `checkedFiles` by intersecting it with the current modified file list so stale checked entries cannot survive.
 
-## UI Style
+## Session State Persistence（会话状态持久化 · 犯错经验）
+
+教训来自：未答 question 弹窗在进程重启后永久丢失的根因排查。
+
+- **铁律：一切「会话可见且应跨重启保留」的状态，必须能从会话 `.jsonl`（`getEntries()` / 文件尾）重建。** 任何只活在 live wrapper 内存（Map/Set/flag）里、且 `startRpcSession` 打开时未从文件重建的状态，进程一重启就静默消失，等同于永久丢失。排查这种 bug 时逐字段问：*重启后我还能从文件推回它吗？*
+- **判断「该不该持久化」**：runtime 启发（loop detection、streaming 边沿、监听器、idle 定时器）与 extension 即时 UI（notify/toast/widget/status/title）属瞬态，天然应随进程丢——不要去持久化它们，那会造出多余状态机。只有「未答信息/用户选择/模型与提示词覆盖」这类会写进历史的内容才需要跨重启保留。
+- **以文件为准，不从内存快照重建**：会话文件里的悬空 `question` toolCall（无对应 toolResult）就是「未答问题」这一事实的持久化真身；恢复它要读文件尾，而非依赖任何上一个进程留下的内存态。
+- **每个「枚举 live-only 状态对外暴露」的出口都要防**：`getAllPendingDialogs`、侧栏待答徽标、`get_state` 等；会话重新打开（`startRpcSession`）时必须让它们也有文件来源，否则会出现「徽标在 / 数据在文件里、但对不上」。
+- **进程被杀写不出 clean 收尾**：kill 前已落盘的悬空 toolCall 才是唯一可靠记录；恢复路径必须读它，不要指望 destroy 清理兜底（本次正是 destroy 没跑才留下悬空）。
+- **防重复弹的循环打断**：恢复后用户作答，把答案以 `<question>` 之后追加一条 user 消息的形式落盘（SDK `appendMessage` 子叶落盘并推进 leaf）——既持久化答案，又让该问题不再处于「最后一条」，下次打开自然不再重复弹。
+- **已知未覆盖边界**（同类但未修）：仅剩「非 `question` 工具经 `ctx.ui.select/confirm/input/editor` 直接弹、又未落 toolResult 的弹窗」未恢复；单问与批量 `questions[]`（multiple）均已从文件尾恢复。撞到再补，不要当已解决。
+
+
 
 - Use the existing Tailwind/global token style in `app/globals.css`.
 - Prefer quiet 1px borders, token colors, compact controls, and no decorative shadows unless the surrounding UI already uses them.

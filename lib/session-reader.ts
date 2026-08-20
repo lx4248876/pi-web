@@ -1,7 +1,16 @@
 import { SessionManager, buildSessionContext as piBuildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { SessionEntry, SessionInfo, SessionContext, SessionTreeNode, AssistantMessage } from "./types";
+import type {
+  SessionEntry,
+  SessionInfo,
+  SessionContext,
+  SessionTreeNode,
+  AssistantMessage,
+  SessionMessageEntry,
+  ToolResultMessage,
+} from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
+import { resolveQuestionParts, type ResolvedQuestionPart } from "./question-options";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -558,6 +567,109 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
 export function getLeafId(entries: SessionEntry[]): string | null {
   if (entries.length === 0) return null;
   return entries[entries.length - 1].id;
+}
+
+// ============================================================================
+// 未答 question 的跨进程恢复（从会话文件重建 pending 弹窗）
+// ============================================================================
+// 场景：会话在发出 question 后被进程终止/重启，弹窗状态只活在旧进程的内存里
+// (AgentSessionWrapper.pendingExtensionRequests)，从未落盘。打开该会话时内存为空，
+// 弹窗永远不弹 —— 会话文件里的悬空 question toolCall 是“未答问题”这一事实的唯一
+// 持久化真身，但此前没有任何代码读它。
+//
+// 规则：只看当前叶子“最后一条 message”。若它是 assistant 且含一条“无对应 toolResult
+// 的 question toolCall”，就认为是待恢复的未答问题，重建出弹窗请求；否则不恢复
+// （已答的、中途继续过的、非 assistant 结尾的都不碰，不做历史考古）。
+
+/** 一条可恢复的悬空 question：工具调用 id + 按现有弹窗契约归一化的请求体。 */
+export interface RehydratedQuestion {
+  toolCallId: string;
+  request: {
+    method: "select" | "input" | "multiple";
+    title: string;
+    // select/input: question+options/placeholder；multiple: questions[]（一次弹多问）。
+    question?: string;
+    placeholder?: string;
+    options?: string[];
+    questions?: ResolvedQuestionPart[];
+  };
+}
+
+// 取 toolCall 内容块某字段，兼容原始(id/name/arguments)与归一化(toolCallId/toolName/input)两种形态
+function blockField(block: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) {
+    if (block[k] != null) return block[k];
+  }
+  return undefined;
+}
+
+/**
+ * 从 session entries 里找出一旦当前叶子挂着的、尚未作答的 question toolCall。
+ * 找到则返回归一化后的弹窗请求；否则返回 null。只在打开会话时调用一次，纯函数可单测。
+ */
+export function resolveLeafUnansweredQuestion(
+  entries: SessionEntry[],
+): RehydratedQuestion | null {
+  // 1) 全量已作答的 toolCallId（任何 toolResult 都算配对）。
+  const resolved = new Set<string>();
+  let lastMessage: SessionEntry | undefined;
+  for (const e of entries) {
+    if (e.type !== "message") continue;
+    const msg = (e as SessionMessageEntry).message;
+    if (msg.role === "toolResult" && (msg as ToolResultMessage).toolCallId) {
+      resolved.add((msg as ToolResultMessage).toolCallId);
+    }
+    lastMessage = e;
+  }
+  if (!lastMessage) return null;
+
+  // 2) 叶子最后一条 message 必须是 assistant 且含悬空 question。
+  const lm = (lastMessage as SessionMessageEntry).message;
+  if (lm.role !== "assistant") return null;
+  const content = Array.isArray(lm.content) ? lm.content : [];
+  for (const rawBlock of content) {
+    const block = rawBlock as unknown as
+      | Record<string, unknown>
+      | null;
+    if (!block || block.type !== "toolCall") continue;
+    const toolName = blockField(block, ["toolName", "name"]);
+    const toolCallId = blockField(block, ["toolCallId", "id"]);
+    if (toolName !== "question" || typeof toolCallId !== "string") continue;
+    if (resolved.has(toolCallId)) continue;
+
+    const rawArgs = blockField(block, ["input", "arguments"]);
+    const params =
+      rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+        ? (rawArgs as Record<string, unknown>)
+        : {};
+    const parts = resolveQuestionParts(params);
+    if (parts.length === 0) continue;
+    // 多问 questions[]（>1）：整体恢复成一次 multiple 弹窗，逐问作答。
+    if (parts.length > 1) {
+      return {
+        toolCallId,
+        request: {
+          method: "multiple",
+          title: `请回答以下 ${parts.length} 个问题`,
+          questions: parts,
+        },
+      };
+    }
+    const part = parts[0];
+    const method: "select" | "input" =
+      part.options.length > 0 ? "select" : "input";
+    return {
+      toolCallId,
+      request: {
+        method,
+        title: part.title,
+        question: part.question,
+        placeholder: part.placeholder,
+        ...(method === "select" ? { options: part.options } : {}),
+      },
+    };
+  }
+  return null;
 }
 
 

@@ -12,7 +12,11 @@ import {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { cacheSessionPath } from "./session-reader";
+import {
+  cacheSessionPath,
+  resolveLeafUnansweredQuestion,
+  type RehydratedQuestion,
+} from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
 import { findPiCli } from "./pi-exec";
 import { composeActiveTools } from "./tool-composition";
@@ -288,6 +292,77 @@ export class AgentSessionWrapper {
 		return Array.from(this.pendingExtensionRequests.values()).map(
 			(p) => p.requestEvent,
 		);
+	}
+
+	/**
+	 * 跨进程恢复一个“未答 question”：上层进程在提问后被终止/重启，弹窗状态只活在
+	 * 旧进程内存里，从未落盘。这里把会话文件里当前叶子悬空的 question 重新塞回
+	 * pending，onEvent 重放 + getAllPendingDialogs 自动覆盖（弹窗重新弹出 + 徽标出现）。
+	 * 作答时把答案作为一条 user 消息落回文件——既让答案持久化不再丢，也让该问题不再
+	 * 是“最后一条 message”，避免下次打开又重复弹同一个问题。不自动 resume、不伪造
+	 * toolResult；不做历史考古（只恢复当前叶子挂着的）。
+	 */
+	rehydrateUnansweredQuestion(recovered: RehydratedQuestion): void {
+		const sessionManager = this.inner.sessionManager as unknown as {
+			appendMessage?: (msg: {
+				role: string;
+				content: Array<{ type: string; text: string }>;
+			}) => string;
+		};
+		const id = `rehydrate:${recovered.toolCallId}`;
+		// 与 live 路径一致：multiple 用 questions[] 一次弹多问；select/input 用单问字段。
+		const method = recovered.request.method;
+		const requestEvent: AgentEvent = {
+			type: "extension_ui_request",
+			id,
+			method,
+			...(method === "multiple"
+				? {
+						title: recovered.request.title,
+						questions: recovered.request.questions ?? [],
+				  }
+				: {
+						title: recovered.request.title,
+						question: recovered.request.question,
+						placeholder: recovered.request.placeholder,
+						...(recovered.request.options
+							? { options: recovered.request.options }
+							: {}),
+				  }),
+		};
+		this.pendingExtensionRequests.set(id, {
+			requestEvent,
+			resolve: (response) => {
+				this.pendingExtensionRequests.delete(id);
+				const answer =
+					response && "value" in response
+						? (response.value as unknown)
+						: undefined;
+				// 取消（cancelled）或空答：不落任何消息，下次打开仍会恢复该问题。
+				if (answer === undefined || answer === null) return;
+				// multiple 的 value 是 string[]：逐问拼一行“问题 -> 答案”；单问就是字符串。
+				let text: string;
+				if (Array.isArray(answer)) {
+					const qs = recovered.request.questions ?? [];
+					text = qs
+						.map((q, i) => `${q.question} -> ${answer[i] ?? ""}`)
+						.join("\n");
+				} else {
+					text = String(answer);
+				}
+				try {
+					sessionManager.appendMessage?.({
+						role: "user",
+						content: [{ type: "text", text }],
+					});
+				} catch (err) {
+					console.error("[rpc-manager] append recovered answer failed:", err);
+				}
+			},
+			reject: () => {
+				this.pendingExtensionRequests.delete(id);
+			},
+		});
 	}
 
 	/**
@@ -1304,6 +1379,26 @@ export async function startRpcSession(
 				},
 			});
 			wrapper.start();
+			// 跨进程未答问题恢复：打开历史会话时，若当前叶子挂着“无对应 toolResult 的
+			// question 弹窗工具调用”，把它重新塞进 pending（见 rehydrateUnansweredQuestion）。
+			// 失败不影响会话启动，仅丢一次恢复机会。
+			try {
+				const sm = wrapper.inner.sessionManager as unknown as {
+					getEntries?: () => unknown[];
+				};
+				const entries = sm.getEntries?.();
+				if (entries) {
+					const recovered = resolveLeafUnansweredQuestion(
+						entries as never,
+					);
+					if (recovered) wrapper.rehydrateUnansweredQuestion(recovered);
+				}
+			} catch (err) {
+				console.error(
+					"[rpc-manager] recover pending question failed:",
+					err,
+				);
+			}
 		} catch (err) {
 			// If extension binding fails (or throws after the wrapper was constructed),
 			// abandon the partially-initialized session instead of leaking an unregistered,
