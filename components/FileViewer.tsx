@@ -543,6 +543,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
+  const [diffPreviewMode, setDiffPreviewMode] = useState(true); // html diff 视图内默认预览
   const [viewMode, setViewMode] = useState<"source" | "diff">("source");
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -650,6 +651,7 @@ function TextFileViewer({ filePath, cwd }: Props) {
     setData(null);
     setPrevContent(null);
     setPreviewMode(false);
+    setDiffPreviewMode(true);
     setViewMode("source");
     setWrapLines(false);
     setChangeCount(0);
@@ -814,6 +816,34 @@ function TextFileViewer({ filePath, cwd }: Props) {
           </div>
         )}
 
+        {/* HTML diff 模式:预览/源码切换(默认预览渲染改动后内容) */}
+        {isHtml && viewMode === "diff" && hasDiff && (
+          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)" }}>
+            <button
+              onClick={() => setDiffPreviewMode(true)}
+              style={{
+                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                background: diffPreviewMode ? "var(--bg-selected)" : "var(--bg-hover)",
+                color: diffPreviewMode ? "var(--text)" : "var(--text-muted)",
+                fontWeight: diffPreviewMode ? 600 : 400,
+              }}
+            >
+              Preview
+            </button>
+            <button
+              onClick={() => setDiffPreviewMode(false)}
+              style={{
+                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                background: !diffPreviewMode ? "var(--bg-selected)" : "var(--bg-hover)",
+                color: !diffPreviewMode ? "var(--text)" : "var(--text-muted)",
+                fontWeight: !diffPreviewMode ? 600 : 400,
+              }}
+            >
+              Diff
+            </button>
+          </div>
+        )}
+
         {/* Word wrap toggle */}
         {viewMode === "source" && !previewMode && (
           <button
@@ -919,7 +949,16 @@ function TextFileViewer({ filePath, cwd }: Props) {
             }}
           />
         ) : viewMode === "diff" && hasDiff ? (
-          <DiffView oldContent={prevContent!} newContent={data.content} language={data.language} />
+          isHtml && diffPreviewMode ? (
+            <iframe
+              srcDoc={applyPreviewTheme(data.content, isDark)}
+              sandbox="allow-scripts"
+              style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
+              title="HTML diff preview"
+            />
+          ) : (
+            <DiffView oldContent={prevContent!} newContent={data.content} language={data.language} />
+          )
         ) : isHtml && previewMode ? (
           <iframe
             srcDoc={applyPreviewTheme(data.content, isDark)}

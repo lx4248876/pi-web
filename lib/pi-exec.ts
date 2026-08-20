@@ -24,7 +24,7 @@ let cachedPiCli: string | null | undefined;
  * binary — never the OS `pi` shim — so user-controlled args are never parsed
  * by a shell.
  */
-function findPiCli(): string | null {
+export function findPiCli(): string | null {
   if (cachedPiCli) return cachedPiCli;
   if (process.env.PI_CLI_PATH && existsSync(process.env.PI_CLI_PATH)) {
     cachedPiCli = process.env.PI_CLI_PATH;

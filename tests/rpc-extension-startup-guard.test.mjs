@@ -35,6 +35,7 @@ async function loadRpcManagerInternals() {
 			}
 			if (specifier === "typebox") return { Type: new Proxy({}, { get: () => () => ({}) }) };
 			if (specifier === "./session-reader") return { cacheSessionPath: () => {} };
+			if (specifier === "./pi-exec") return { findPiCli: () => "/fake/pi/dist/cli.js" };
 			if (specifier === "./tool-composition") return { composeActiveTools: () => [] };
 			if (specifier === "./question-options")
 				return {

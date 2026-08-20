@@ -13,7 +13,9 @@ export interface SkillsData {
  */
 const cache = new Map<string, { ts: number; value: SkillsData }>();
 const TTL = 20_000;
-let pending: Promise<SkillsData> | null = null;
+// In-flight scan per cwd, so concurrent loads for different cwd never reuse
+// the wrong scan (a single shared promise would cross-session-pollute skills).
+const pending = new Map<string, Promise<SkillsData>>();
 
 export function clearSkillsCache() {
   cache.clear();
@@ -23,21 +25,20 @@ export async function loadSkillsCached(cwd: string): Promise<SkillsData> {
   const hit = cache.get(cwd);
   if (hit && Date.now() - hit.ts < TTL) return hit.value;
 
-  if (pending) {
-    const value = await pending;
-    cache.set(cwd, { ts: Date.now(), value });
-    return value;
+  let promise = pending.get(cwd);
+  if (!promise) {
+    promise = (async () => {
+      try {
+        const loader = new DefaultResourceLoader({ cwd, agentDir: getAgentDir() });
+        await loader.reload();
+        return loader.getSkills() as SkillsData;
+      } finally {
+        pending.delete(cwd);
+      }
+    })();
+    pending.set(cwd, promise);
   }
-  pending = (async () => {
-    try {
-      const loader = new DefaultResourceLoader({ cwd, agentDir: getAgentDir() });
-      await loader.reload();
-      return loader.getSkills() as SkillsData;
-    } finally {
-      pending = null;
-    }
-  })();
-  const value = await pending;
+  const value = await promise;
   cache.set(cwd, { ts: Date.now(), value });
   return value;
 }

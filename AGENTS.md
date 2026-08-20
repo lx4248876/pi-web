@@ -1,5 +1,10 @@
 # Pi Web Agent Notes
 
+## 项目地图 / 先读
+- 结构骨架：`docs/project-map.md`（目录职责 + 关键链路文件详解）。
+- 机器可读索引：`docs/project-map.index.json`（按 path / chains 定位文件）。
+- 需要一键重新生成/刷新：调用 `codemap` 技能（全量重扫重写）。
+
 Keep this file short: it is loaded into every agent turn for this project.
 
 ## Commands
@@ -10,6 +15,12 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Tests: `npm test`（原生 `.mjs` + 经 jiti 的 `.ts`；新增 `.ts` 测试需 `node --import jiti/register --test`）。
 - Package manager is **npm**. Do not use `bun install`/`bun.lock` in this repo: the `postinstall: patch-package` step (in `patches/`) only runs under npm, and skipping it silently drops the MSYS-path and other dependency patches.
 - Do not run `next build` during normal local agent work. It writes `.next/` output that can confuse hot reload and local path resolution.
+
+## Browser Verification（浏览器/页面验收）
+
+- 所有浏览器/页面验证**一律走 `web-verify` 技能**，由主代理执行；worker/reviewer 子代理只消费报告，不得驱动浏览器验收。
+- 本项目**不使用 `agent-browser` CLI / `agent_browser` 工具**作为浏览器底座或验收路径，也不允许静默换用它冒充验收。
+- web-verify 默认底座=当前 harness 原生浏览器能力；任何外部适配器只有显式申报并写入报告才可用，否则 `BLOCKED`。
 
 ## Debug Artifacts
 

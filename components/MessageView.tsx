@@ -1538,7 +1538,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
                         fontSize: 12.5,
                         lineHeight: 1.6,
                         borderRadius: 0,
-                        backgroundColor: "var(--bg)",
+                        background: "var(--bg)",
                         maxHeight: isCollapsed ? "300px" : "1000px",
                         overflow: "auto",
                     }}

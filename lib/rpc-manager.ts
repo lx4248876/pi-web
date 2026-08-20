@@ -14,6 +14,7 @@ import {
 import { Type } from "typebox";
 import { cacheSessionPath } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
+import { findPiCli } from "./pi-exec";
 import { composeActiveTools } from "./tool-composition";
 import {
 	resolveQuestionParts,
@@ -349,6 +350,8 @@ export class AgentSessionWrapper {
 	}
 
 	private lastSessionNotifyAt = 0;
+
+	private promptInFlight = false;
 
 	emit(event: AgentEvent): void {
 		void event; // 事件本体不用于列表通知；见 notifySessionListListeners 的节流逻辑
@@ -771,6 +774,11 @@ export class AgentSessionWrapper {
 
 		switch (type) {
 			case "prompt": {
+				// Guard against concurrent prompts on the same session (double submit /
+				// rapid re-run): two `prompt()` calls on one inner agent would interleave
+				// generation and corrupt the session's history.
+				if (this.promptInFlight) throw new Error("Session is already running a prompt");
+				this.promptInFlight = true;
 				// Reset loop detection when user sends a new message
 				this.resetLoopDetection();
 				// Fire and forget — events come via subscribe
@@ -791,6 +799,12 @@ export class AgentSessionWrapper {
 							message: err instanceof Error ? err.message : String(err),
 						};
 						this.emit(errorEvent);
+					})
+					.finally(() => {
+						// Keep the guard honest even when the wrapper is torn down meanwhile;
+						// a dead wrapper's flag is irrelevant, but this also unblocks a live
+						// session after any failure path.
+						this.promptInFlight = false;
 					});
 				return null;
 			}
@@ -1032,6 +1046,18 @@ export class AgentSessionWrapper {
 		if (!this._alive) return;
 		this._alive = false;
 		if (this.idleTimer) clearTimeout(this.idleTimer);
+		// A destroyed wrapper's pending extension dialogs can never be answered;
+		// cancel them (resolve to the same `undefined`/default the abort path
+		// produces) so awaiting prompts (createDialogPromise) don't hang forever
+		// and don't surface as unhandled rejections after teardown.
+		for (const pending of this.pendingExtensionRequests.values()) {
+			try {
+				pending.resolve({ cancelled: true } as RpcExtensionUIResponse);
+			} catch {
+				// already settled
+			}
+		}
+		this.pendingExtensionRequests.clear();
 		this.unsubscribe?.();
 		this.onDestroyCallback?.();
 	}
@@ -1246,6 +1272,16 @@ export async function startRpcSession(
 		// the only way to truly clear it is to call agent.setSystemPrompt directly.
 		if (toolNames?.length === 0) {
 			inner.agent.state.systemPrompt = "";
+		}
+
+		// pi-subagents spawns child pi CLI processes. Resolution from argv[1]/package
+		// fails inside in-process (embedded) sessions, falling back to a bare `pi`
+		// command that isn't on the server PATH -> `spawn pi ENOENT` on every child.
+		// Pin the CLI path via the documented env override so web-hosted subagents
+		// can spawn regardless of PATH. Set once; harmless if already configured.
+		if (process.env.PI_SUBAGENT_PI_BINARY === undefined) {
+			const cliPath = findPiCli();
+			if (cliPath) process.env.PI_SUBAGENT_PI_BINARY = cliPath;
 		}
 
 		const wrapper = new AgentSessionWrapper(inner);

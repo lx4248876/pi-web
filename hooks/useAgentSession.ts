@@ -276,7 +276,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		modelId: string;
 	} | null>(null);
 	const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">(
-		"full",
+		"default",
 	);
 	const [retryInfo, setRetryInfo] = useState<{
 		attempt: number;

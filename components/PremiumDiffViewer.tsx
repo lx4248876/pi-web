@@ -1,6 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { diffLines, diffWordsWithSpace } from "diff";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { useTheme } from "@/hooks/useTheme";
+import { applyPreviewTheme } from "@/lib/html-preview-theme";
 
 /* ═══════════════════════════════════════════════════════════
    Side-by-side Diff Modal with collapse + per-hunk rollback
@@ -17,62 +22,45 @@ type DiffHunk =
   | { type: "change"; segments: DiffSegment[]; startIdx: number };
 
 function computeDiff(oldText: string, newText: string): DiffSegment[] {
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
-  const m = oldLines.length;
-  const n = newLines.length;
-  const max = m + n;
-  const v: number[] = new Array(2 * max + 1).fill(0);
-  const trace: number[][] = [];
+  // jsdiff(已安装依赖)做真正的对齐 diff:未变行两侧同时锚定,只标真正变了的行;
+  // 取代旧的 Myers SES 首个解,它常把整段(未变行都算作) delete+add,看不出区别。
+  const parts = diffLines(oldText, newText);
+  const segments: DiffSegment[] = [];
+  let oldLine = 1;
+  let newLine = 1;
+  const pendingDel: string[] = []; // 等待的删除行(后面紧跟新增块 → 按行配对成 replace)
 
-  for (let d = 0; d <= max; d++) {
-    trace.push([...v]);
-    for (let k = -d; k <= d; k += 2) {
-      let x: number;
-      if (k === -d || (k !== d && v[k - 1 + max] < v[k + 1 + max])) { x = v[k + 1 + max]; }
-      else { x = v[k - 1 + max] + 1; }
-      let y = x - k;
-      while (x < m && y < n && oldLines[x] === newLines[y]) { x++; y++; }
-      v[k + max] = x;
-      if (x >= m && y >= n) {
-        const edits: Array<{ type: "keep" | "del" | "add"; oldIdx?: number; newIdx?: number }> = [];
-        let cx = m, cy = n;
-        for (let dd = d; dd > 0; dd--) {
-          const pv = trace[dd - 1];
-          const pk = cx - cy;
-          let prevK: number;
-          if (pk === -dd || (pk !== dd && pv[pk - 1 + max] < pv[pk + 1 + max])) { prevK = pk + 1; }
-          else { prevK = pk - 1; }
-          const prevX = pv[prevK + max];
-          const prevY = prevX - prevK;
-          while (cx > prevX && cy > prevY) { cx--; cy--; edits.unshift({ type: "keep", oldIdx: cx, newIdx: cy }); }
-          if (dd > 0) {
-            if (cx > prevX) { cx--; edits.unshift({ type: "del", oldIdx: cx }); }
-            else { cy--; edits.unshift({ type: "add", newIdx: cy }); }
-          }
-        }
-        while (cx > 0 && cy > 0) { cx--; cy--; edits.unshift({ type: "keep", oldIdx: cx, newIdx: cy }); }
-        // Handle remaining deletions when cy === 0
-        while (cx > 0) { cx--; edits.unshift({ type: "del", oldIdx: cx }); }
+  const flushDel = () => {
+    for (const t of pendingDel) segments.push({ type: "del", oldLine: oldLine++, text: t });
+    pendingDel.length = 0;
+  };
 
-        const segments: DiffSegment[] = [];
-        let i = 0;
-        while (i < edits.length) {
-          const e = edits[i];
-          if (e.type === "keep") { segments.push({ type: "equal", oldLine: e.oldIdx! + 1, newLine: e.newIdx! + 1, text: oldLines[e.oldIdx!] }); i++; }
-          else if (e.type === "del" && i + 1 < edits.length && edits[i + 1].type === "add" && edits[i + 1].newIdx! >= 0) { segments.push({ type: "replace", oldLine: e.oldIdx! + 1, newLine: edits[i + 1].newIdx! + 1, oldText: oldLines[e.oldIdx!], newText: newLines[edits[i + 1].newIdx!] }); i += 2; }
-          else if (e.type === "del") { segments.push({ type: "del", oldLine: e.oldIdx! + 1, text: oldLines[e.oldIdx!] }); i++; }
-          else if (e.type === "add" && e.newIdx! >= 0) { segments.push({ type: "add", newLine: e.newIdx! + 1, text: newLines[e.newIdx!] }); i++; }
-          else { i++; } // Skip invalid add operations with negative newIdx
+  for (const part of parts) {
+    const lines = part.value === "" ? [] : part.value.split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+
+    if (part.added && !part.removed) {
+      if (pendingDel.length === 0) {
+        for (const t of lines) segments.push({ type: "add", newLine: newLine++, text: t });
+      } else {
+        // 删除块紧接新增块 = 替换:按行两两配对成 replace,余量转纯 del/add
+        const paired = Math.min(pendingDel.length, lines.length);
+        for (let i = 0; i < paired; i++) {
+          segments.push({ type: "replace", oldLine: oldLine++, newLine: newLine++, oldText: pendingDel[i], newText: lines[i] });
         }
-        return segments;
+        for (let i = paired; i < pendingDel.length; i++) segments.push({ type: "del", oldLine: oldLine++, text: pendingDel[i] });
+        for (let i = paired; i < lines.length; i++) segments.push({ type: "add", newLine: newLine++, text: lines[i] });
+        pendingDel.length = 0;
       }
+    } else if (part.removed && !part.added) {
+      pendingDel.push(...lines);
+    } else {
+      flushDel();
+      for (const t of lines) segments.push({ type: "equal", oldLine: oldLine++, newLine: newLine++, text: t });
     }
   }
-  return [
-    ...oldLines.map((t, i) => ({ type: "del" as const, oldLine: i + 1, text: t })),
-    ...newLines.map((t, i) => ({ type: "add" as const, newLine: i + 1, text: t })),
-  ];
+  flushDel();
+  return segments;
 }
 
 function groupIntoHunks(segments: DiffSegment[]): DiffHunk[] {
@@ -120,6 +108,15 @@ export function PremiumDiffViewer({
   /** 可选的多文件 tab 栏,渲染在头部与列头之间 */
   tabs?: { key: string; label: string; active: boolean; onSelect: () => void }[];
 }) {
+  const { isDark } = useTheme();
+  const isHtml = /\.(html?)$/i.test(filePath.split("?")[0]);
+  const isMarkdown = /\.(md|mdx|markdown)$/i.test(filePath.split("?")[0]);
+  const [viewMode, setViewMode] = useState<"preview" | "diff">(isHtml || isMarkdown ? "preview" : "diff");
+  // 切文件(多 tab)或 intial props 变化时,按当前文件类型重置默认视图
+  const [showSource, setShowSource] = useState(false);
+  useEffect(() => { setViewMode(isHtml || isMarkdown ? "preview" : "diff"); }, [isHtml, isMarkdown]);
+  // 文件类型/文件变化时,预览模式的「渲染版 / 源码」切回默认渲染版
+  useEffect(() => { setShowSource(false); }, [isHtml, isMarkdown, filePath]);
   const segments = useMemo(() => computeDiff(diffData.oldContent, diffData.newContent), [diffData.oldContent, diffData.newContent]);
   const hunks = useMemo(() => groupIntoHunks(segments), [segments]);
   const leftRef = useRef<HTMLDivElement>(null);
@@ -165,6 +162,26 @@ export function PremiumDiffViewer({
     return { oldText: oldLines.join("\n"), newText: newLines.join("\n") };
   };
 
+  /** 替换行渲染:用 jsdiff diffWordsWithSpace 对行内做词级高亮,只看得到真正变了的词 */
+  const renderReplaceInline = (seg: Extract<DiffSegment,{type:"replace"}>, side: "left" | "right") => {
+    const tokens = diffWordsWithSpace(seg.oldText, seg.newText);
+    const pieces = side === "left"
+      ? tokens.filter((t) => !t.added).map((t) => ({ text: t.value, changed: !!t.removed }))
+      : tokens.filter((t) => !t.removed).map((t) => ({ text: t.value, changed: !!t.added }));
+    const color = side === "left" ? "#f87171" : "#4ade80";
+    return (
+      <span style={{ flex: 1, whiteSpace: "pre", paddingLeft: 4 }}>
+        {pieces.length === 0 ? "\u00a0" : pieces.map((p, i) => (
+          <span key={i} style={{
+            color: p.changed ? color : "var(--text-muted)",
+            background: p.changed ? (side === "left" ? "rgba(239,68,68,0.18)" : "rgba(34,197,94,0.18)") : "transparent",
+            borderRadius: 2,
+          }}>{p.text || "\u00a0"}</span>
+        ))}
+      </span>
+    );
+  };
+
   const lineH = 20;
   const hasChanges = segments.some((s) => s.type !== "equal");
   const scrollStyle: React.CSSProperties = { colorScheme: "dark", scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" };
@@ -202,12 +219,12 @@ export function PremiumDiffViewer({
       }
       return <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, background: "rgba(234,234,234,0.03)" }}><span style={{ width: 48, flexShrink: 0 }} /><span style={{ flex: 1 }} /></div>;
     }
-    // replace
+    // replace — 行内词级高亮
     const isLeft = side === "left";
     return (
       <div key={`${side}-${idx}`} style={{ display: "flex", height: lineH, width: "max-content", background: "rgba(234,179,8,0.08)", borderLeft: "3px solid #eab308" }}>
         <span style={{ width: 48, textAlign: "right", paddingRight: 8, color: "var(--text-dim)", fontSize: 10, userSelect: "none", flexShrink: 0 }}>{isLeft ? seg.oldLine : seg.newLine}</span>
-        <span style={{ flex: 1, color: isLeft ? "#f87171" : "#4ade80", whiteSpace: "pre", paddingLeft: 4 }}>{(isLeft ? seg.oldText : seg.newText) || "\u00a0"}</span>
+        {renderReplaceInline(seg, side)}
       </div>
     );
   };
@@ -220,6 +237,10 @@ export function PremiumDiffViewer({
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0, background: "var(--bg-panel)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>{historicalDiffHash ? "Commit Diff" : "Working Copy Diff"}</span>
+            <div style={{ display: "flex", background: "var(--bg-hover)", borderRadius: 5, padding: 1, border: "1px solid var(--border)" }}>
+                <button onClick={() => setViewMode("preview")} style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none", fontWeight: 600, background: viewMode === "preview" ? "var(--accent)" : "transparent", color: viewMode === "preview" ? "#fff" : "var(--text-muted)" }}>Preview</button>
+                <button onClick={() => setViewMode("diff")} style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, cursor: "pointer", border: "none", fontWeight: 600, background: viewMode === "diff" ? "var(--accent)" : "transparent", color: viewMode === "diff" ? "#fff" : "var(--text-muted)" }}>Diff</button>
+              </div>
             {historicalDiffHash && <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--accent)", background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", padding: "1px 5px", borderRadius: 4 }}>{historicalDiffHash}</span>}
           </div>
           <span style={{ flex: 1, textAlign: "center", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text)" }}>{filePath}</span>
@@ -251,6 +272,57 @@ export function PremiumDiffViewer({
             ))}
           </div>
         )}
+        {/* Preview 模式的「渲染版 / 源码」切换:仅 html/md 需要(非 html/md 预览本来就直接显示源码) */}
+        {viewMode === "preview" && (isHtml || isMarkdown) && (
+          <div style={{ display: "flex", gap: 6, padding: "8px 14px", borderBottom: "1px solid var(--border)", background: "var(--bg-panel)", flexShrink: 0, alignItems: "center" }}>
+            <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)" }}>
+              <button
+                type="button"
+                onClick={() => setShowSource(false)}
+                style={{ padding: "3px 10px", fontSize: 11, border: "none", cursor: "pointer", background: !showSource ? "var(--bg-selected)" : "var(--bg-hover)", color: !showSource ? "var(--text)" : "var(--text-muted)", fontWeight: !showSource ? 600 : 400 }}
+              >
+                预览版
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSource(true)}
+                style={{ padding: "3px 10px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer", background: showSource ? "var(--bg-selected)" : "var(--bg-hover)", color: showSource ? "var(--text)" : "var(--text-muted)", fontWeight: showSource ? 600 : 400 }}
+              >
+                源码
+              </button>
+            </div>
+          </div>
+        )}
+        {/* Preview mode: html 用预览器渲染、md 渲染成文档,其他类型显示改动后内容源码;选「源码」时 html/md 也显示原文 */}
+        {viewMode === "preview" ? (
+          showSource ? (
+          <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", background: "var(--bg)", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.6, whiteSpace: "pre", ...scrollStyle }}>
+            {diffData.newContent || "\u00a0"}
+          </div>
+          ) : isHtml ? (
+          <div style={{ flex: 1, display: "flex", minHeight: 0, padding: 12, background: isDark ? "#0d1117" : "#fff" }}>
+            <iframe
+              title="HTML preview"
+              srcDoc={applyPreviewTheme(diffData.newContent, isDark)}
+              style={{ flex: 1, border: "1px solid var(--border)", borderRadius: 8, background: "#fff" }}
+              sandbox="allow-scripts"
+              width="100%"
+              height="100%"
+            />
+          </div>
+          ) : isMarkdown ? (
+          <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
+            <div className="markdown-body markdown-file-preview" style={{ maxWidth: 800, margin: "0 auto", padding: "24px 20px" }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{diffData.newContent}</ReactMarkdown>
+            </div>
+          </div>
+          ) : (
+          <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", background: "var(--bg)", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.6, whiteSpace: "pre", ...scrollStyle }}>
+            {diffData.newContent || "\u00a0"}
+          </div>
+          )
+        ) : (
+        <>
         {/* Column headers */}
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0, background: "var(--bg-panel)" }}>
           <div style={{ flex: 1, padding: "4px 12px", fontSize: 11, fontWeight: 600, color: "var(--text-dim)", borderRight: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", opacity: 0.6 }} />{historicalDiffHash ? "Parent" : "HEAD (原版)"}</div>
@@ -317,6 +389,8 @@ export function PremiumDiffViewer({
             })}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
