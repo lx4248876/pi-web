@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>待答徽标「文件为准」补丁 · 讲解</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f6f7f9; --text:#22272e; --muted:#6b7280;
+    --border:#dfe3e8; --accent:#2563eb; --ok:#15803d; --warn:#b45309; --code:#0f172a; --codebg:#0f172a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;padding:24px}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:26px;line-height:1.3;margin:8px 0 4px}
+  h2{font-size:19px;margin:30px 0 10px;display:flex;align-items:center;gap:8px}
+  .lead{background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:14px 16px;margin:14px 0}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:10px 0}
+  .step{display:none;margin-top:4px;padding-left:18px;border-left:2px solid var(--border)}
+  .step.on{display:block}
+  details{border:1px solid var(--border);border-radius:8px;margin:8px 0;background:var(--panel)}
+  summary{cursor:pointer;padding:10px 14px;font-weight:600}
+  pre{background:var(--codebg);color:#e2e8f0;padding:12px 14px;border-radius:8px;overflow:auto;font-size:13px;line-height:1.5}
+  code{background:var(--panel);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:.92em}
+  .tag{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:20px;margin-right:6px;color:#fff}
+  .t-ok{background:var(--ok)} .t-warn{background:var(--warn)}
+  button{cursor:pointer;border:1px solid var(--accent);color:var(--accent);background:#fff;border-radius:6px;padding:5px 12px;font-size:14px}
+  button:hover{background:var(--accent);color:#fff}
+  .muted{color:var(--muted);font-size:14px}
+  .chips span{display:inline-block;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:13px;margin:4px 4px 0 0}
+  ul,ol{padding-left:22px}
+  .bottom{border-top:1px solid var(--border);margin-top:40px;padding-top:14px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="muted">pi-web 修复讲解 · 2026-08-21 · 交互页可离线打开</p>
+  <h1>🧭 待答徽标：从「只数打开中的」改为「文件里有就算」</h1>
+
+  <div class="lead"><strong>一句话结论：</strong>以前侧栏「待答」徽标只数<strong>当前进程里正打开的会话</strong>；现在它还会去<strong>翻会话文件</strong>，只要某个会话的文件里挂着一条还没回答的问题，就算进去——即使你关掉它 / 进程重启 / 闲了很久，徽标也亮。</div>
+
+  <div class="card">
+    <strong>🍵 生活类比：</strong>把每个会话当成一张「待办纸」。旧办法是——只有你<strong>（进程）此刻正拿在手里那几张纸</strong>，徽标才数得到；纸被放下、或者你人走开 10 分钟把纸收进抽屉（idle 销毁），徽标就把它「忘了」。新办法是——每次点一下徽标，都会去<strong>翻一遍所有文件抽屉</strong>，凡是有张纸最后一行写着「这有个问题等你回」，就给你点亮。纸在哪不重要，只要问题还写在上面就露出来。
+  </div>
+
+  <h2>📌 你做了什么 → 系统从哪进 → 你看到什么</h2>
+  <p>侧栏徽标每 4 秒轮询一次后端接口 <code>/api/pending-questions</code>。这次改动让那个接口在「内存里正在打开的会话」之外，<strong>再并上「从会话文件里读出有未答问题、但本进程没打开的会话」</strong>，然后按会话 id 去重返回。你看到的结果就是徽标残留不再莫名其妙消失。</p>
+  <div class="card">
+    <p class="chips"><span>侧栏徽标</span> → <span>4s 轮询后端</span> → <span>内存 ∪ 文件派生</span> → <span>按 id 去重</span> → <span>徽标点亮</span></p>
+    <p>点击各步看细节：</p>
+    <button data-step="0">① 侧栏徽标</button>
+    <button data-step="1">② 4s 轮询</button>
+    <button data-step="2">③ 内存 ∪ 文件</button>
+    <button data-step="3">④ 去重</button>
+    <button data-step="4">⑤ 点亮</button>
+  </div>
+  <div id="steps"></div>
+
+  <h2>⚙️ 动了哪几块</h2>
+  <div class="card"><strong>· lib/rpc-manager.ts</strong> <span class="muted">（会话编排核心）</span><br/>主改动。把原来的「只扫内存」抽出为 <code>collectMemoryPending</code>；新增 <code>scanFilePending</code> 去枚举会话文件、用现成的 <code>resolveLeafUnansweredQuestion</code> 判断「叶子是否挂着未答问题」；再用 <code>unionPendingDialogs</code> 把内存与文件结果按 id 合并不重复。加了一层按「文件大小+修改时间」的缓存，文件没变就不重复解析。</div>
+  <div class="card"><strong>· app/api/pending-questions/route.ts</strong> <span class="muted">（徽标接口）</span><br/>因主函数改为异步，接口改成 <code>await</code> 调用。</div>
+  <div class="card"><strong>· tests/getAllPendingDialogs-recon.test.ts</strong> <span class="muted">（新增测试）</span><br/>4 条用例：文件里有未答问题但未开会话 → 应返回；内存∪文件同 id 只出现一次且内存优先；保序；空文件时全保内存。先红后绿。</div>
+
+  <h2>✅ 怎么亲手验证（怎么测）</h2>
+  <div class="card">
+    <p><strong>场景：让一个「有未答问题、但进程没开着它」的会话出现。</strong></p>
+    <ol>
+      <li>在某会话里触发一道<span code>question</span>提问弹窗，但<strong>不回答</strong>；</li>
+      <li>把 dev server 彻底杀掉重启（或等 10 分钟触发 idle 销毁），让该会话不再「正在打开」；</li>
+      <li>浏览器访问 <code>http://localhost:3030/api/pending-questions</code>；</li>
+      <li><strong>应看到</strong>：返回 <code>pending</code> 数组里包含那个会话的 <code>sessionId</code>（旧版这里会没有它）。</li>
+    </ol>
+    <p class="muted">自动化侧：<code>node --import jiti/register --test tests/getAllPendingDialogs-recon.test.ts</code> 4 条通过；全量 <code>npm test</code> 76 条通过。</p>
+  </div>
+
+  <details id="nav"><summary>⌨️ 查看真实改动的代码片段（点开才显示）</summary>
+<pre>// lib/rpc-manager.ts —— 新的合并函数（部分）
+function unionPendingDialogs(memory, file) {
+  const seen = new Set(); const out = [];
+  for (const d of memory) { if (seen.has(d.sessionId)) continue; seen.add(d.sessionId); out.push(d); }
+  for (const d of file)   { if (seen.has(d.sessionId)) continue; seen.add(d.sessionId); out.push(d); }
+  return out;
+}
+// 文件侧扫描：枚举顶层会话 → 跳过已覆盖的 → 解析叶子未答问题 → 并入
+async function scanFilePending({ excludeIds }) {
+  const out = [];
+  let sessions; try { sessions = await SessionManager.listAll(); } catch { return out; }
+  for (const s of sessions) {
+    if (excludeIds.has(s.id)) continue;
+    const recovered = readCachedUnansweredQuestion(s.path);   // 按 文件大小+修改时间 缓存
+    if (!recovered) continue;
+    out.push({ sessionId: s.id, request: { type: "extension_ui_request", ...recovered.request } });
+  }
+  return out;
+}
+export async function getAllPendingDialogs(scanner = scanFilePending) {
+  const memory = collectMemoryPending();
+  const file = await scanner({ excludeIds: new Set(memory.map(d => d.sessionId)) });
+  return unionPendingDialogs(memory, file);
+}</pre>
+  </details>
+
+  <h2>😌 没动什么 / 边界</h2>
+  <ul>
+    <li><span class="tag t-ok">没动</span> 前端组件、subagent 面板、pi 运行时、会话文件的写入格式——纯后端聚合补强。</li>
+    <li><span class="tag t-ok">没动</span> 已确认保留的已知边界：扩展工具直接调 <code>ctx.ui</code> 弹的窗（非 <code>question</code> 工具）仍需开发侧写 side-channel 才能恢复，本次按决策留档不修。</li>
+    <li><span class="tag t-warn">已知边界</span> 只扫顶层会话，子会话（subagent，本就浏览-only）不挂未答徽标，与旧行为一致、非回归。</li>
+    <li><span class="tag t-warn">已知边界</span> 瞬时读文件失败会漏一拍徽标，但下轮轮询自动自愈。</li>
+  </ul>
+
+  <div class="bottom">
+    <strong>验证事实：</strong>新增 4 条用例 <code>4/4</code> 通过（含证明旧缺口变红的用例）；全量 <code>npm test</code> <code>76/76</code> 通过；<code>tsc --noEmit</code> 干净；reviewer 独立审查 PASS（已按建议补 request 的 <code>type</code> 字段 + 两条边界注释）。<br/>
+    <span class="muted">改动未提交，仍与工作区里另一批「自动压缩」未提交改动共存，交给主人确认后再 commit。</span>
+  </div>
+
+</div>
+<script>
+  var steps = [
+    {t:"① 侧栏徽标", c:"前端 <code>usePendingSessionIds</code> 每 4 秒调一次接口，只关心返回里的 <code>sessionId</code>——徽标就是「有哪些会话还没回答问题」。"},
+    {t:"② 4s 轮询", c:"每次轮询都打 <code>/api/pending-questions</code>。旧版这里只数「进程当前打开的会话」，新版多了一层文件扫描。"},
+    {t:"③ 内存 ∪ 文件", c:"先拿「正在打开且挂问题」的会话（内存），再去把所有会话文件里「叶子挂着未答问题、但没被打开的」捞出来，两并合一。"},
+    {t:"④ 去重", c:"同一个会话即使内存、文件两边都算到，也只留一次（内存优先），你不会重复看到两个一模一样的徽标。"},
+    {t:"⑤ 点亮", c:"合并后的 id 集合返回给前端，侧栏把对应会话的「待答」小点点亮。"}
+  ];
+  function renderSteps(enabledIndex){
+    var box = document.getElementById('steps'); box.innerHTML = '';
+    steps.forEach(function(s,i){
+      var d = document.createElement('div'); d.className = 'step' + (i===enabledIndex?' on':'');
+      var h = '<strong>'+s.t+'</strong><p>'+s.c+'</p>'; d.innerHTML = h; box.appendChild(d);
+    });
+  }
+  renderSteps(0);
+  document.querySelectorAll('[data-step]').forEach(function(b){
+    b.addEventListener('click', function(){ renderSteps(parseInt(b.getAttribute('data-step'),10)); });
+  });
+  document.getElementById('nav').querySelector('summary').addEventListener('click', function(){});
+</script>
+</body>
+</html>

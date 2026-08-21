@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { SkillSearchResult } from "@/app/api/skills/search/route";
+import { useModalRect } from "./app-shell/useModalRect";
 
 interface Skill {
   name: string;
@@ -581,6 +582,18 @@ export function SkillsConfig({
 
   const selectedSkill = skills.find((s) => s.filePath === selected) ?? null;
 
+  const {
+    clampedRect: modalRect,
+    handleBarPointerDown,
+    handleResizePointerDown,
+    onPointerMove: onModalPointerMove,
+    onPointerUp: onModalPointerUp,
+  } = useModalRect({
+    storageKey: "pi-web:skills-modal-rect",
+    defaultWidth: 860,
+    defaultHeight: 620,
+  });
+
   return (
     <div
       style={{
@@ -598,8 +611,13 @@ export function SkillsConfig({
     >
       <div
         style={{
-          width: 860,
-          height: "78vh",
+          position: "absolute",
+          left: modalRect.x,
+          top: modalRect.y,
+          width: modalRect.width,
+          height: modalRect.height,
+          maxWidth: "calc(100vw - 2px)",
+          maxHeight: "calc(100vh - 2px)",
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 10,
@@ -607,10 +625,15 @@ export function SkillsConfig({
           flexDirection: "column",
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
+          boxSizing: "border-box",
         }}
       >
-        {/* Header */}
+        {/* Header (draggable) */}
         <div
+          onPointerDown={handleBarPointerDown}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to move"
           style={{
             display: "flex",
             alignItems: "center",
@@ -618,6 +641,8 @@ export function SkillsConfig({
             padding: "12px 18px",
             borderBottom: "1px solid var(--border)",
             flexShrink: 0,
+            cursor: "move",
+            userSelect: "none",
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -907,6 +932,26 @@ export function SkillsConfig({
             Close
           </button>
         </div>
+
+        {/* Resize handle — bottom-right */}
+        <div
+          onPointerDown={(e) => { e.stopPropagation(); handleResizePointerDown(e); }}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to resize"
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: 0,
+            width: 18,
+            height: 18,
+            cursor: "nwse-resize",
+            background: "linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 60%, transparent 60%)",
+            opacity: 0.5,
+            borderBottomRightRadius: 9,
+            zIndex: 2,
+          }}
+        />
       </div>
     </div>
   );

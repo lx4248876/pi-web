@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { FileViewer } from "@/components/FileViewer";
 import { TabBar, type Tab } from "@/components/TabBar";
+import { useModalRect } from "./useModalRect";
 
 interface RightPanelProps {
   open: boolean;
@@ -15,60 +16,24 @@ interface RightPanelProps {
   cwd?: string;
 }
 
-interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-const STORAGE_KEY = "pi-web:file-modal-rect";
-const DEFAULT_WIDTH = 1100;
-const DEFAULT_HEIGHT = 620;
-const MIN_WIDTH = 360;
-const MIN_HEIGHT = 260;
-// 四周留白,保证始终有可抓的边
-const EDGE = 12;
-
-/** 把矩形夹进视口内(至少露出可操作部分),并限制最小尺寸。 */
-function clampRect(r: Rect): Rect {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const width = Math.min(Math.max(r.width, MIN_WIDTH), vw - 2 * EDGE);
-  const height = Math.min(Math.max(r.height, MIN_HEIGHT), vh - 2 * EDGE);
-  const x = Math.max(EDGE, Math.min(r.x, vw - width - EDGE));
-  const y = Math.max(EDGE, Math.min(r.y, vh - height - EDGE));
-  return { x, y, width, height };
-}
-
-/** 读取记忆的矩形;没有则居中。 */
-function loadRect(): Rect {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const p = JSON.parse(saved) as Partial<Rect>;
-      return clampRect({ x: p.x ?? 0, y: p.y ?? 0, width: p.width ?? DEFAULT_WIDTH, height: p.height ?? DEFAULT_HEIGHT });
-    }
-  } catch { /* localStorage unavailable, fall through to centered */ }
-  const width = Math.min(DEFAULT_WIDTH, window.innerWidth - 2 * EDGE);
-  const height = Math.min(DEFAULT_HEIGHT, window.innerHeight - 2 * EDGE);
-  return { x: Math.round((window.innerWidth - width) / 2), y: Math.round((window.innerHeight - height) / 2), width, height };
-}
-
-function persistRect(r: Rect) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(r));
-  } catch { /* persistence is best-effort */ }
-}
-
 /**
- * 文件/Git 查看弹窗:居中(或恢复记忆位置)浮层。标题栏可拖动位移,右下角手柄可调大小,
- * 位置与大小都记忆到 localStorage,再次打开时恢复。Esc / 遮罩 / 关闭按钮关闭。
+ * 文件/Git 查看弹窗：居中(或恢复记忆位置)浮层。标题栏可拖动位移，右下角手柄可调大小，
+ * 位置与大小都记忆到 localStorage（经共享 useModalRect），再次打开时恢复。
+ * Esc / 遮罩 / 关闭按钮关闭。
  */
 export function RightPanel(props: RightPanelProps) {
   const { open, tabs, activeTabId, onSelectTab, onCloseTab, onClose, activeFilePath, cwd } = props;
-  const [rect, setRect] = useState<Rect>(() => (typeof window === "undefined" ? { x: 0, y: 0, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT } : loadRect()));
-  const dragRef = useRef<{ type: "move" | "resize"; startX: number; startY: number; startRect: Rect } | null>(null);
+  const {
+    clampedRect: r,
+    handleBarPointerDown,
+    handleResizePointerDown,
+    onPointerMove,
+    onPointerUp,
+  } = useModalRect({
+    storageKey: "pi-web:file-modal-rect",
+    defaultWidth: 1100,
+    defaultHeight: 620,
+  });
 
   // Esc 关闭编辑区不关闭
   useEffect(() => {
@@ -85,56 +50,6 @@ export function RightPanel(props: RightPanelProps) {
   }, [open, onClose]);
 
   if (!open) return null;
-
-  // 每次渲染夹一次,窗口缩放后也不会跑出视口(不改 state,用计算值渲染)
-  const r = clampRect(rect);
-
-  const handleBarPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragRef.current = { type: "move", startX: e.clientX, startY: e.clientY, startRect: clampRect(rect) };
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    document.body.style.cursor = "move";
-    document.body.style.userSelect = "none";
-  };
-  const handleBarPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d || d.type !== "move") return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
-    // 从固定起点算,绝不累加 —— 鼠标挪多少就精确移动多少
-    setRect(clampRect({ ...d.startRect, x: d.startRect.x + dx, y: d.startRect.y + dy }));
-  };
-  const handleBarPointerUp = () => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    persistRect(clampRect(rect));
-  };
-
-  const handleResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragRef.current = { type: "resize", startX: e.clientX, startY: e.clientY, startRect: clampRect(rect) };
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    document.body.style.cursor = "nwse-resize";
-    document.body.style.userSelect = "none";
-  };
-  const handleResizePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d || d.type !== "resize") return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
-    // 从固定起点算,绝不累加 —— 鼠标挪多少就精确改多少
-    setRect(clampRect({ ...d.startRect, width: d.startRect.width + dx, height: d.startRect.height + dy }));
-  };
-  const handleResizePointerUp = () => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    persistRect(clampRect(rect));
-  };
 
   return (
     <div
@@ -173,8 +88,8 @@ export function RightPanel(props: RightPanelProps) {
         {/* Title drag bar */}
         <div
           onPointerDown={handleBarPointerDown}
-          onPointerMove={handleBarPointerMove}
-          onPointerUp={handleBarPointerUp}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
           title="Drag to move"
           style={{
             display: "flex",
@@ -256,9 +171,9 @@ export function RightPanel(props: RightPanelProps) {
 
         {/* Resize handle — bottom-right */}
         <div
-          onPointerDown={handleResizePointerDown}
-          onPointerMove={handleResizePointerMove}
-          onPointerUp={handleResizePointerUp}
+          onPointerDown={(e) => { e.stopPropagation(); handleResizePointerDown(e); }}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
           title="Drag to resize"
           style={{
             position: "absolute",

@@ -187,6 +187,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
     if (isStreaming) return;
+    if (isCompacting) return; // 压缩中禁止发送：后端也会拦截（双保险）
     onSend(msg, attachedImages.length ? attachedImages : undefined);
     // Immediately clear localStorage before resetting state
     try {
@@ -197,11 +198,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [value, attachedImages, isStreaming, onSend, clearImages, storageKey]);
+  }, [value, attachedImages, isStreaming, isCompacting, onSend, clearImages, storageKey]);
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
+    if (isCompacting) return; // 压缩中禁止 steer/follow-up
     if (mode === "steer" && onSteer) {
       onSteer(msg, attachedImages.length ? attachedImages : undefined);
     } else if (mode === "followup" && onFollowUp) {
@@ -214,7 +216,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     setValue("");
     clearImages();
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [value, attachedImages, onSteer, onFollowUp, clearImages, storageKey]);
+  }, [value, attachedImages, isCompacting, onSteer, onFollowUp, clearImages, storageKey]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -230,6 +232,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }
       if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
+        if (isCompacting) return; // 压缩中回车不发送也不排队
         if (isStreaming && onFollowUp) {
           // 正在输出时按回车 → 排队（follow_up）：结束后再发，不打断当前输出
           sendQueued("followup");
@@ -238,7 +241,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
     },
-    [isStreaming, onSteer, onFollowUp, sendQueued, handleSend, skillMenuOpen, mentionMenuOpen]
+    [isStreaming, isCompacting, onSteer, onFollowUp, sendQueued, handleSend, skillMenuOpen, mentionMenuOpen]
   );
 
   const handleInput = useCallback(() => {
@@ -514,7 +517,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             onInput={handleInput}
             onPaste={handlePaste}
             placeholder={
-              isStreaming && (onSteer || onFollowUp)
+              isCompacting ? "正在压缩上下文，请稍候…"
+                : isStreaming && (onSteer || onFollowUp)
                 ? "Steer 立即注入 / Follow-up 排队…"
                 : isStreaming ? "Agent is running…"
                 : "Message…"
@@ -589,21 +593,22 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           ) : (
             <button
               onClick={handleSend}
-              disabled={!value.trim() && !attachedImages.length}
+              disabled={(!value.trim() && !attachedImages.length) || isCompacting}
+              title={isCompacting ? "正在压缩上下文…" : undefined}
               style={{
                 flexShrink: 0,
                 alignSelf: "flex-end",
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "7px 14px",
-                background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
+                background: (value.trim() || attachedImages.length) && !isCompacting ? "var(--accent)" : "var(--bg-panel)",
                 border: "none",
                 borderRadius: 8,
-                color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                color: (value.trim() || attachedImages.length) && !isCompacting ? "#fff" : "var(--text-dim)",
+                cursor: (value.trim() || attachedImages.length) && !isCompacting ? "pointer" : "not-allowed",
                 fontSize: 13,
                 fontWeight: 600,
                 letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                boxShadow: (value.trim() || attachedImages.length) && !isCompacting ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
                 transition: "background 0.15s, box-shadow 0.15s",
               }}
             >

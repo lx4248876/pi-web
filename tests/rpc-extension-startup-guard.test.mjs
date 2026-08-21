@@ -21,12 +21,15 @@ async function loadRpcManagerInternals() {
 		exports: moduleObj.exports,
 		require(specifier) {
 			if (specifier === "node:crypto") return { randomUUID: () => "id" };
+			if (specifier === "node:fs") return { readFileSync: () => "{}" };
+			if (specifier === "node:path") return { join: (...parts) => parts.join("/") };
 			if (specifier === "@earendil-works/pi-coding-agent") {
 				return {
 					defineTool: (tool) => tool,
 					createAgentSession: async () => {
 						throw new Error("unused");
 					},
+					getAgentDir: () => "/fake/agent-dir",
 					SessionManager: {},
 					Theme: class Theme {
 						constructor() {}
@@ -37,6 +40,12 @@ async function loadRpcManagerInternals() {
 			if (specifier === "./session-reader") return { cacheSessionPath: () => {} };
 			if (specifier === "./pi-exec") return { findPiCli: () => "/fake/pi/dist/cli.js" };
 			if (specifier === "./tool-composition") return { composeActiveTools: () => [] };
+			if (specifier === "./compaction-override")
+				return {
+					applyCompactionOverride: () => {},
+					assertNotCompacting: () => {},
+					readAutoCompactThreshold: () => undefined,
+				};
 			if (specifier === "./question-options")
 				return {
 					readQuestionRequest: () => ({ title: "", question: "", options: [] }),

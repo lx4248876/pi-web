@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { pickTestModelId } from "@/lib/models-config-test-connection";
 import { validateApiKeyValue } from "@/lib/api-key-guard";
+import { useModalRect } from "./app-shell/useModalRect";
 // Color icons (have their own fill colors — no background needed)
 import AnthropicIcon from "@lobehub/icons/es/Anthropic/components/Mono";
 import OpenAIIcon from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -105,6 +106,8 @@ interface ModelEntry {
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** 自动压缩阈值（tokens）：上下文超过该值自动压缩；留空 = 不开启自动压缩 */
+  autoCompactThreshold?: number;
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
   compat?: Record<string, unknown>;
 }
@@ -631,6 +634,14 @@ function ModelDetail({
             onChange={(v) => set("maxTokens", v ? parseInt(v) : undefined)} placeholder="16384" />
         </Field>
       </div>
+
+      <Field label="自动压缩阈值 (tokens)">
+        <NumInput value={model.autoCompactThreshold !== undefined ? String(model.autoCompactThreshold) : ""}
+          onChange={(v) => set("autoCompactThreshold", v ? parseInt(v) : undefined)} placeholder="留空 = 不开启自动压缩" />
+        <span style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, lineHeight: 1.5 }}>
+          上下文超过该值时自动压缩历史（需模型已填 Context window）；留空则不开启自动压缩。
+        </span>
+      </Field>
 
       <div>
         <SectionTitle>Cost (per million tokens)</SectionTitle>
@@ -1247,6 +1258,17 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const {
+    clampedRect: modalRect,
+    handleBarPointerDown,
+    handleResizePointerDown,
+    onPointerMove: onModalPointerMove,
+    onPointerUp: onModalPointerUp,
+  } = useModalRect({
+    storageKey: "pi-web:models-modal-rect",
+    defaultWidth: 860,
+    defaultHeight: 620,
+  });
 
   const loadOAuthProviders = useCallback(() => {
     fetch("/api/auth/providers")
@@ -1423,10 +1445,31 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
     <>
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ width: 860, height: "78vh", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+      <div style={{
+        position: "absolute",
+        left: modalRect.x,
+        top: modalRect.y,
+        width: modalRect.width,
+        height: modalRect.height,
+        maxWidth: "calc(100vw - 2px)",
+        maxHeight: "calc(100vh - 2px)",
+        background: "var(--bg)",
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        display: "flex",
+        flexDirection: "column",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+        overflow: "hidden",
+        boxSizing: "border-box",
+      }}>
 
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        {/* Header (draggable) */}
+        <div
+          onPointerDown={handleBarPointerDown}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to move"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0, cursor: "move", userSelect: "none" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Models</span>
             <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.pi/agent/models.json</code>
@@ -1593,6 +1636,26 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
             <span>{savedOk ? "Saved" : saving ? "Saving…" : "Save"}</span>
           </button>
         </div>
+
+        {/* Resize handle — bottom-right */}
+        <div
+          onPointerDown={(e) => { e.stopPropagation(); handleResizePointerDown(e); }}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to resize"
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: 0,
+            width: 18,
+            height: 18,
+            cursor: "nwse-resize",
+            background: "linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 60%, transparent 60%)",
+            opacity: 0.5,
+            borderBottomRightRadius: 9,
+            zIndex: 2,
+          }}
+        />
       </div>
     </div>
     {pickerOpen && (

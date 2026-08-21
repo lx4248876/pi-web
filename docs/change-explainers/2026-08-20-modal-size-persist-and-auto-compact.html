@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>改动讲解：弹窗尺寸记忆 + 模型自动压缩阈值</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f8f9fa; color: #1f2933; line-height: 1.7; padding: 24px 16px 64px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e4e7eb; border-radius: 12px; padding: 22px 26px; margin-bottom: 18px; }
+  h1 { font-size: 22px; margin-bottom: 6px; color: #10222e; }
+  h2 { font-size: 16px; margin-bottom: 12px; color: #10222e; display: flex; align-items: center; gap: 8px; }
+  .subtitle { color: #52606d; font-size: 14px; margin-bottom: 4px; }
+  .before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+  .ba { border-radius: 8px; padding: 12px 14px; font-size: 13px; }
+  .ba.before { background: #fff5f5; border: 1px solid #fecaca; }
+  .ba.after { background: #f0fdf4; border: 1px solid #bbf7d0; }
+  .ba b { display: block; margin-bottom: 4px; font-size: 12px; }
+  .ba.before b { color: #b91c1c; }
+  .ba.after b { color: #15803d; }
+  .analogy { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px 16px; font-size: 13.5px; margin: 12px 0; }
+  .steps { counter-reset: step; margin: 12px 0; }
+  .step { position: relative; padding: 10px 14px 10px 52px; border-left: 2px solid #e4e7eb; margin-left: 12px; cursor: pointer; }
+  .step:hover { background: #f3f4f6; }
+  .step::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 10px; width: 26px; height: 26px; border-radius: 50%; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+  .step b { font-size: 13.5px; }
+  .step p { font-size: 13px; color: #52606d; margin-top: 2px; }
+  details { border: 1px solid #e4e7eb; border-radius: 8px; padding: 0; margin-top: 10px; background: #fafbfc; }
+  details summary { padding: 10px 14px; cursor: pointer; font-size: 13px; font-weight: 600; color: #2563eb; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px; }
+  details summary::before { content: "▸"; transition: transform .15s; }
+  details[open] summary::before { transform: rotate(90deg); }
+  details .inner { padding: 4px 16px 14px; font-size: 12.5px; }
+  pre { background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 11.5px; line-height: 1.6; font-family: "Cascadia Code", Consolas, monospace; }
+  code.inline { background: #eef1f4; border-radius: 4px; padding: 1px 5px; font-family: Consolas, monospace; font-size: 12px; color: #be185d; }
+  .file-list { list-style: none; }
+  .file-list li { padding: 8px 0 8px 30px; position: relative; border-bottom: 1px dashed #e4e7eb; font-size: 13px; }
+  .file-list li:last-child { border-bottom: none; }
+  .file-list li::before { position: absolute; left: 2px; }
+  .file-list li.mod::before { content: "✏️"; }
+  .file-list li.new::before { content: "🆕"; }
+  .file-list li .path { font-family: Consolas, monospace; font-size: 12px; color: #52606d; display: block; }
+  .file-list li .what { color: #1f2933; }
+  .test-cmd { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 14px 16px; margin: 10px 0; }
+  .copy-row { display: flex; gap: 8px; align-items: stretch; margin-top: 8px; }
+  .copy-row code { flex: 1; background: #0f172a; color: #e2e8f0; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-family: Consolas, monospace; display: flex; align-items: center; }
+  .copy-btn { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 0 14px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+  .copy-btn:hover { background: #1d4ed8; }
+  .badge { display: inline-block; font-size: 11px; border-radius: 10px; padding: 2px 10px; font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .badge.pass { background: #dcfce7; color: #15803d; }
+  .badge.note { background: #e0e7ff; color: #3730a3; }
+  .warn { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 10px; }
+  .ok-note { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  th, td { border: 1px solid #e4e7eb; padding: 7px 10px; text-align: left; }
+  th { background: #f3f4f6; font-size: 12px; }
+  .footer-note { text-align: center; color: #9aa5b1; font-size: 12px; margin-top: 26px; }
+  @media (max-width: 640px) { .before-after { grid-template-columns: 1fr; } body { padding: 12px 8px 48px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="card">
+  <h1>📌 两个新能力：弹窗大小会「记住」了 + 模型可以配「自动瘦身」了</h1>
+  <p class="subtitle">本次改动 2026-08-20 · pi-web（本地 Web 控制台）</p>
+  <div class="before-after">
+    <div class="ba before"><b>❌ 以前</b>Models / Skills / 插件市场三个设置弹窗大小写死（860×78vh 等），既不能拖大拖小，刷新后也不会记住你上次调的大小。自动压缩只有一套全局默认（16384 tokens 预留），面板上没有任何开关。</div>
+    <div class="ba after"><b>✅ 现在</b>三个弹窗都能拖标题栏移动、拖右下角手柄调大小，刷新页面后原样恢复。每个模型可以单独填一个「自动压缩阈值」——上下文涨到这个数就自动压缩历史；压缩期间输入框锁定防误发；<b>留空就完全不启用自动压缩</b>。</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🏠 生活类比</h2>
+  <div class="analogy">
+    <b>弹窗尺寸记忆</b>就像你家窗帘：以前每次拉开都回到厂家固定的位置；现在你拉到哪，窗帘轨道就「记住」哪，下次还是停在那个高度。<br><br>
+    <b>自动压缩阈值</b>就像笔记本的「换页规则」：一本笔记本（模型的上下文窗口）写满了就得把前几页撕下来抄成摘要（压缩历史）。以前是不管你写多满、系统固定在「剩 1.6 万字就换页」；现在你可以在每个本子封面上写「写到 8 万字就换页」，也可以写「永远别自动换页」（留空）。换页的那几秒钟，笔会被暂时收走（禁止发送消息），抄完摘要再还给你。
+  </div>
+</div>
+
+<div class="card">
+  <h2>🧩 功能一：弹窗拖拽缩放 + 持久化（怎么串起来的）</h2>
+  <div class="steps">
+    <div class="step" onclick="toggleDetail(this)"><b>你拖动弹窗右下角手柄 / 标题栏</b><p>鼠标位置变化实时算出新的「位置 + 宽高」，并夹在屏幕范围内（不会拖出屏幕、不会小于最小尺寸 360×260）。</p></div>
+    <div class="step" onclick="toggleDetail(this)"><b>松手的那一刻存进浏览器</b><p>尺寸存到你电脑浏览器的 localStorage，每个弹窗一个独立「抽屉」（Models / Skills / Packages 各一个），互不覆盖。</p></div>
+    <div class="step" onclick="toggleDetail(this)"><b>下次打开（哪怕刷新过页面）</b><p>弹窗先看抽屉里有没有上次的记录：有就原样恢复；没有就居中显示默认大小。</p></div>
+  </div>
+  <details><summary>看功能一动了哪几块代码</summary><div class="inner">
+    <ul class="file-list">
+      <li class="new"><span class="what">新建共享 hook：拖动/缩放/记忆的核心逻辑都在这</span><span class="path">components/app-shell/useModalRect.ts</span></li>
+      <li class="mod"><span class="what">文件查看弹窗：删掉自己的一套重复实现，改用上面的共享 hook（行为不变）</span><span class="path">components/app-shell/RightPanel.tsx</span></li>
+      <li class="mod"><span class="what">三个配置弹窗：接上共享 hook，获得拖拽 + 记忆能力</span><span class="path">components/ModelsConfig.tsx / SkillsConfig.tsx / PackagesConfig.tsx</span></li>
+    </ul>
+  </div></details>
+</div>
+
+<div class="card">
+  <h2>⚙️ 功能二：模型级自动压缩阈值（怎么串起来的）</h2>
+  <div class="steps">
+    <div class="step" onclick="toggleDetail(this)"><b>你在模型面板填一个数字</b><p>Models → 选某个模型 → 「自动压缩阈值 (tokens)」填如 800000，保存。这个数字存在 models.json 里那个模型的条目上（每个模型各配各的）。</p></div>
+    <div class="step" onclick="toggleDetail(this)"><b>会话启动 / 切模型 / 改配置时自动换算</b><p>后台把「阈值」换算成 pi 引擎认识的参数：预留量 = 窗口大小 − 阈值（例：100 万窗口、80 万阈值 → 预留 20 万）。这个换算只存在会话内存里，不污染全局配置文件。</p></div>
+    <div class="step" onclick="toggleDetail(this)"><b>上下文涨到阈值 → 自动压缩</b><p>每轮对话结束后引擎检查：上下文 tokens 超过阈值，就把旧历史抄写成摘要，腾出空间。压缩期间输入框变成「正在压缩上下文，请稍候…」，发送按钮锁死；后台也有一道保险，压缩中发来的消息会被直接拒绝。压完自动解锁。</p></div>
+    <div class="step" onclick="toggleDetail(this)"><b>没填 = 完全不启用</b><p>留空的模型，自动压缩被显式关闭（包括「快撑爆了才压」的兜底）——溢出时会直接报错，这是你选择「不自动压」的字面后果。</p></div>
+  </div>
+  <details><summary>看功能二动了哪几块代码</summary><div class="inner">
+    <ul class="file-list">
+      <li class="new"><span class="what">换算核心（纯函数）：阈值→开关+预留量、压缩中拦截判断</span><span class="path">lib/compaction-override.ts</span></li>
+      <li class="mod"><span class="what">会话管家：启动/切模型/重载配置三处应用换算；压缩中拦截发送/打断/排队三种消息</span><span class="path">lib/rpc-manager.ts</span></li>
+      <li class="mod"><span class="what">模型面板：新增「自动压缩阈值」输入框 + 说明文字</span><span class="path">components/ModelsConfig.tsx</span></li>
+      <li class="mod"><span class="what">聊天输入框：压缩中锁发送（按钮/回车/排队/占位提示）</span><span class="path">components/ChatInput.tsx</span></li>
+    </ul>
+  </div></details>
+  <div class="warn">⚠️ <b>两个要知道的边界</b>：① 阈值必须小于该模型的 Context window（填了更大的数 = 无效，等于没开）；② 留空关闭自动压缩是「彻底关」——连上下文溢出时的兜底压缩都没有了，溢出会直接报错让你手动 Compact。</div>
+</div>
+
+<div class="card">
+  <h2>🧪 怎么测（你可以亲手验证）</h2>
+  <div class="test-cmd">
+    <b>验弹窗记忆：</b>打开 http://localhost:3030 → 点侧栏底部「Models」→ 拖弹窗右下角手柄把它拉宽 → 按 F5 刷新 → 再点开 Models → 弹窗应该还是你拉宽后的大小（Skills / Packages 同理）。
+    <div class="copy-row"><code id="cmd1">打开 http://localhost:3030 → Models 弹窗 → 拖右下角调大小 → F5 → 重开 → 尺寸保持</code><button class="copy-btn" onclick="copyCmd('cmd1')">复制</button></div>
+  </div>
+  <div class="test-cmd">
+    <b>验阈值配置：</b>Models → 任选一个已填 Context window 的模型 → 「自动压缩阈值」填 800000 → Save → 重新打开该模型详情，输入框里还是 800000；清空再 Save → 重新打开是空的（= 不启用）。
+    <div class="copy-row"><code id="cmd2">Models → 模型详情 → 阈值填 800000 → Save → 重开弹窗核对</code><button class="copy-btn" onclick="copyCmd('cmd2')">复制</button></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🛡️ 没动什么 / 风险边界</h2>
+  <table>
+    <tr><th>区域</th><th>状态</th><th>说明</th></tr>
+    <tr><td>文件查看弹窗（右栏）</td><td>✅ 行为不变</td><td>只是内部改用共享 hook，拖拽/记忆行为与之前完全一致（storage key 也没变）</td></tr>
+    <tr><td>全局 settings.json</td><td>✅ 未被写入</td><td>阈值换算只进会话内存（pi 的 applyOverrides 已核实不落盘）；配置唯一真身是 models.json</td></tr>
+    <tr><td>pi 引擎本体</td><td>✅ 未修改</td><td>只调用 pi 公开 API，无源码补丁</td></tr>
+    <tr><td>会话文件 / 历史</td><td>✅ 未触碰</td><td>压缩行为由 pi 引擎自己写，本改动只提供「何时压」的参数</td></tr>
+  </table>
+  <div class="ok-note">📋 已知取舍：没填阈值的会话连「溢出兜底压缩」也关闭（用户确认过的字面语义）；models.json 读取失败时静默按「未配置」处理，不会炸会话。</div>
+</div>
+
+<div class="card">
+  <h2>✅ 验证事实（真实跑过的）</h2>
+  <table>
+    <tr><th>检查</th><th>结果</th><th>证据</th></tr>
+    <tr><td>新增单元测试（换算/拦截/矩形夹取）</td><td><span class="badge pass">14/14 PASS</span></td><td>tests/compaction-override.test.mjs（10）+ tests/modal-rect.test.mjs（4），TDD 先红后绿</td></tr>
+    <tr><td>全量测试套件</td><td><span class="badge pass">72/72 PASS</span></td><td>npm test（含既有全部测试，1 个既有测试的加载桩按新 import 适配）</td></tr>
+    <tr><td>TypeScript 类型检查</td><td><span class="badge pass">PASS</span></td><td>tsc --noEmit 零错误</td></tr>
+    <tr><td>ESLint</td><td><span class="badge pass">与基线一致</span></td><td>58 个问题全部为改动前既有（stash 对比验证），本次零新增</td></tr>
+    <tr><td>浏览器页面验收</td><td><span class="badge pass">PASS 5/5</span></td><td>.web-verify/reports/modal-size-compaction-2026-08-20/report.md（真实浏览器：三弹窗拖拽+刷新恢复、阈值输入框存在、保存进 models.json 后已还原）</td></tr>
+  </table>
+</div>
+
+<div class="footer-note">本页由主代理基于真实 diff 与验证输出生成 · 2026-08-20 · 离线单文件，无外部依赖</div>
+</div>
+
+<script>
+function toggleDetail(el) { /* 步骤条点击轻微高亮，无副作用 */ el.style.background = el.style.background ? '' : '#eef2ff'; }
+function copyCmd(id) {
+  var text = document.getElementById(id).textContent;
+  if (navigator.clipboard) { navigator.clipboard.writeText(text).then(function(){ flashBtn(event.target); }); }
+  else { var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); flashBtn(event.target); }
+}
+function flashBtn(btn) { var old = btn.textContent; btn.textContent = '已复制 ✓'; btn.style.background = '#15803d'; setTimeout(function(){ btn.textContent = old; btn.style.background = ''; }, 1200); }
+</script>
+</body>
+</html>

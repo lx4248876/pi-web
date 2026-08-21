@@ -1,3 +1,5 @@
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
 	ExtensionUIContext,
@@ -8,17 +10,23 @@ import type {
 import {
 	createAgentSession,
 	defineTool,
+	getAgentDir,
 	SessionManager,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
+import {
+	applyCompactionOverride,
+	assertNotCompacting,
+	readAutoCompactThreshold,
+} from "./compaction-override";
 import { Type } from "typebox";
 import {
   cacheSessionPath,
+  getSessionEntries,
   resolveLeafUnansweredQuestion,
   type RehydratedQuestion,
 } from "./session-reader";
 import type { AgentSessionLike, ToolInfo } from "./pi-types";
-import { findPiCli } from "./pi-exec";
 import { composeActiveTools } from "./tool-composition";
 import {
 	resolveQuestionParts,
@@ -393,8 +401,52 @@ export class AgentSessionWrapper {
 					);
 				}),
 			]);
+			// models.json 可能改了某模型的 contextWindow 或 autoCompactThreshold，
+			// 重截后同步刷新自动压缩阈值（内存 override，不落盘）。
+			this.applyModelCompactionOverride();
 		} finally {
 			if (timer) clearTimeout(timer);
+		}
+	}
+
+	/**
+	 * 按当前模型在 models.json 里配置的 autoCompactThreshold，
+	 * 把自动压缩开关/预留量写进会话内存设置（applyOverrides 不落盘）。
+	 * 没填/无效 → 显式关闭（覆盖 pi 默认开启）；详见 lib/compaction-override.ts。
+	 * models.json 读取失败不影响会话（静默视为未配置）。
+	 */
+	applyModelCompactionOverride(): void {
+		const model = this.inner.model;
+		if (!model) return;
+		const readModelsJsonEntry = (
+			provider: string,
+			modelId: string,
+		): Record<string, unknown> | undefined => {
+			try {
+				const raw = JSON.parse(
+					readFileSync(join(getAgentDir(), "models.json"), "utf8"),
+				) as {
+					providers?: Record<string, { models?: Record<string, unknown>[] }>;
+				};
+				return raw.providers?.[provider]?.models?.find(
+					(m) => (m as { id?: string }).id === modelId,
+				);
+			} catch {
+				return undefined;
+			}
+		};
+		const threshold = readAutoCompactThreshold(
+			model.provider,
+			model.id,
+			readModelsJsonEntry,
+		);
+		try {
+			applyCompactionOverride(this.inner.settingsManager, {
+				contextWindow: (model as { contextWindow?: number }).contextWindow,
+				autoCompactThreshold: threshold,
+			});
+		} catch (err) {
+			console.error("[rpc-manager] apply compaction override failed:", err);
 		}
 	}
 
@@ -853,6 +905,8 @@ export class AgentSessionWrapper {
 				// rapid re-run): two `prompt()` calls on one inner agent would interleave
 				// generation and corrupt the session's history.
 				if (this.promptInFlight) throw new Error("Session is already running a prompt");
+				// 压缩中禁止发送：压缩会重写会话历史，中途 prompt 会写到旧历史上。
+				assertNotCompacting(this.inner.isCompacting);
 				this.promptInFlight = true;
 				// Reset loop detection when user sends a new message
 				this.resetLoopDetection();
@@ -942,6 +996,8 @@ export class AgentSessionWrapper {
 				}
 				if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 				await this.inner.setModel(model);
+				// 切了模型 → 按新模型的阈值重算自动压缩设置（每个模型阈值不同）。
+				this.applyModelCompactionOverride();
 				return { id: model.id, provider: model.provider };
 			}
 
@@ -1060,6 +1116,7 @@ export class AgentSessionWrapper {
 			}
 
 			case "steer": {
+				assertNotCompacting(this.inner.isCompacting);
 				const steerImages = command.images as
 					| Array<{ type: "image"; data: string; mimeType: string }>
 					| undefined;
@@ -1071,6 +1128,7 @@ export class AgentSessionWrapper {
 			}
 
 			case "follow_up": {
+				assertNotCompacting(this.inner.isCompacting);
 				const followImages = command.images as
 					| Array<{ type: "image"; data: string; mimeType: string }>
 					| undefined;
@@ -1194,14 +1252,41 @@ export function getActiveRpcSessionIds(): Set<string> {
 
 /**
  * 有“未答问题”的会话（供侧边栏徽标，非打断式）。
- * 两个会话都挂着未答 question 时，刷新页面后也能从这拿到全部，
- * 不会让任何一个看起来“没了”。
  */
-export function getAllPendingDialogs(): Array<{
+// 类型：文件派生的悬空 question 扫描器。默认真实现走 session-reader 的
+// getSessionEntries / resolveLeafUnansweredQuestion；测试用假 scanner 注入。
+export type FilePendingScanner = (opts: {
+	excludeIds: Set<string>;
+}) => Promise<Array<{ sessionId: string; request: AgentEvent }>>;
+
+/**
+ * 内存（live wrapper）与文件派生的待答 dialog 按 sessionId 去重并集。
+ * 保序：先 memory 后 file；file 与 memory 同 id 时只留 memory 那次。
+ */
+export function unionPendingDialogs(
+	memory: Array<{ sessionId: string; request: AgentEvent }>,
+	file: Array<{ sessionId: string; request: AgentEvent }>,
+): Array<{ sessionId: string; request: AgentEvent }> {
+	const seen = new Set<string>();
+	const out: Array<{ sessionId: string; request: AgentEvent }> = [];
+	for (const d of memory) {
+		if (seen.has(d.sessionId)) continue;
+		seen.add(d.sessionId);
+		out.push(d);
+	}
+	for (const d of file) {
+		if (seen.has(d.sessionId)) continue;
+		seen.add(d.sessionId);
+		out.push(d);
+	}
+	return out;
+}
+
+/** 内部：只从 live registry 收集待答 dialog（原 getAllPendingDialogs 逻辑）。 */
+function collectMemoryPending(): Array<{
 	sessionId: string;
 	request: AgentEvent;
-}>
-{
+}> {
 	const out: Array<{ sessionId: string; request: AgentEvent }> = [];
 	for (const [sessionId, wrapper] of getRegistry()) {
 		// 防御热重载错配：registry 里的 wrapper 可能是旧代码生成的实例，没有
@@ -1215,6 +1300,110 @@ export function getAllPendingDialogs(): Array<{
 		}
 	}
 	return out;
+}
+
+// 文件派生的未答 question 读取缓存，仿 statusCacheG 模式挂 globalThis，避免
+// dev-server 热重载后丢失。键 = 会话文件路径（绝对路径）；文件未变（mtime+size
+// 相同）时直接复用上次的解析结果，不重复解析全文。
+type FilePendingCacheEntry = {
+	mtimeMs: number;
+	size: number;
+	question: RehydratedQuestion | null;
+};
+
+const filePendingCacheG = globalThis as typeof globalThis & {
+	__piFilePendingCache?: Map<string, FilePendingCacheEntry>;
+};
+
+function getFilePendingCache(): Map<string, FilePendingCacheEntry> {
+	if (!filePendingCacheG.__piFilePendingCache) {
+		filePendingCacheG.__piFilePendingCache = new Map();
+	}
+	return filePendingCacheG.__piFilePendingCache;
+}
+
+function readCachedUnansweredQuestion(
+	filePath: string,
+): RehydratedQuestion | null {
+	let st: { mtimeMs: number; size: number };
+	try {
+		const s = statSync(filePath);
+		st = { mtimeMs: s.mtimeMs, size: s.size };
+	} catch {
+		// 读不到文件视同无未答问题（返回 null）。瞬时读失败会让一次徽标轮询漏报，
+		// 但下一轮 statSync 拿到新 mtime 会自愈，属可接受折衷。
+		return null;
+	}
+
+	const cache = getFilePendingCache();
+	const hit = cache.get(filePath);
+	if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+		return hit.question;
+	}
+
+	let question: RehydratedQuestion | null = null;
+	try {
+		question = resolveLeafUnansweredQuestion(getSessionEntries(filePath));
+	} catch {
+		question = null;
+	}
+	cache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, question });
+	// 粗防泄漏：缓存条目超过会话文件数量一个量级时清理失效路径（仿 getStatusCache）。
+	if (cache.size > 2000) {
+		for (const key of cache.keys()) {
+			cache.delete(key);
+			if (cache.size <= 1000) break;
+		}
+	}
+	return question;
+}
+
+/**
+ * 默认 scanner：枚举顶层会话，对每个本进程未打开的会话文件解析悬空 question，
+ * 把文件里有、但（因重启/idle destroy）内存里没有的未答会话并进结果。
+ */
+async function scanFilePending(opts: {
+	excludeIds: Set<string>;
+}): Promise<Array<{ sessionId: string; request: AgentEvent }>> {
+	const out: Array<{ sessionId: string; request: AgentEvent }> = [];
+	let sessions;
+	try {
+		sessions = await SessionManager.listAll();
+	} catch {
+		return out;
+	}
+	// 只扫顶层会话：subagent 子会话（browse-only）故意不徽标（与内存侧一致，
+	// 非回归），见 scanChildSessions。若将来要给子会话挂未答徽标需另行扩展。
+	for (const s of sessions) {
+		if (opts.excludeIds.has(s.id)) continue;
+		const recovered = readCachedUnansweredQuestion(s.path);
+		if (!recovered) continue;
+		// 徽标契约（hooks/usePendingSessionIds.ts）只读 pending[].sessionId；
+		// 但为与内存侧（memory 的 request 带 type: extension_ui_request）对称，
+		// 补上 type，避免将来消费端读到 undefined type。
+		out.push({
+			sessionId: s.id,
+			request: {
+				type: "extension_ui_request",
+				...recovered.request,
+			} as unknown as AgentEvent,
+		});
+	}
+	return out;
+}
+
+/**
+ * 有“未答问题”的会话（供侧边栏徽标，非打断式）。
+ * 在内存（live wrapper）之外还并入文件派生的悬空 question 会话，使进程重启 /
+ * idle destroy 后徽标仍亮：只要文件里有未答 question 就数得到。
+ */
+export async function getAllPendingDialogs(
+	scanner?: FilePendingScanner,
+): Promise<Array<{ sessionId: string; request: AgentEvent }>> {
+	const memory = collectMemoryPending();
+	const excludeIds = new Set(memory.map((d) => d.sessionId));
+	const file = await (scanner ?? scanFilePending)({ excludeIds });
+	return unionPendingDialogs(memory, file);
 }
 
 // ─── 会话列表变更订阅（供 /api/sessions/events SSE 推送） ─────────────────────
@@ -1349,15 +1538,11 @@ export async function startRpcSession(
 			inner.agent.state.systemPrompt = "";
 		}
 
-		// pi-subagents spawns child pi CLI processes. Resolution from argv[1]/package
-		// fails inside in-process (embedded) sessions, falling back to a bare `pi`
-		// command that isn't on the server PATH -> `spawn pi ENOENT` on every child.
-		// Pin the CLI path via the documented env override so web-hosted subagents
-		// can spawn regardless of PATH. Set once; harmless if already configured.
-		if (process.env.PI_SUBAGENT_PI_BINARY === undefined) {
-			const cliPath = findPiCli();
-			if (cliPath) process.env.PI_SUBAGENT_PI_BINARY = cliPath;
-		}
+		// pi-subagents spawns child pi CLI processes. Do NOT set PI_SUBAGENT_PI_BINARY
+		// to a bare cli.js script path: pi-subagents spawns that value directly as an
+		// executable, and on Windows spawn a .js -> EFTYPE on every child. Leave it
+		// unset so the default resolution runs `node <cli.js> ...` (peer symlink under
+		// ~/.pi/agent/npm/node_modules/@earendil-works makes that resolvable in web host).
 
 		const wrapper = new AgentSessionWrapper(inner);
 		guardRpcExtensionStartupHandlers(
@@ -1379,6 +1564,9 @@ export async function startRpcSession(
 				},
 			});
 			wrapper.start();
+			// 按当前模型的 autoCompactThreshold 预热自动压缩设置（没填 → 显式关闭，
+			// 覆盖 pi 默认开启；见 lib/compaction-override.ts）。
+			wrapper.applyModelCompactionOverride();
 			// 跨进程未答问题恢复：打开历史会话时，若当前叶子挂着“无对应 toolResult 的
 			// question 弹窗工具调用”，把它重新塞进 pending（见 rehydrateUnansweredQuestion）。
 			// 失败不影响会话启动，仅丢一次恢复机会。

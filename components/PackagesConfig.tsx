@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { PiPackage } from "@/lib/pi-packages";
+import { useModalRect } from "./app-shell/useModalRect";
 
 function fmtMatches(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
@@ -526,6 +527,18 @@ export function PackagesConfig({
 
   const selectedPkg = packages.find((p) => p.name === selected) ?? null;
 
+  const {
+    clampedRect: modalRect,
+    handleBarPointerDown,
+    handleResizePointerDown,
+    onPointerMove: onModalPointerMove,
+    onPointerUp: onModalPointerUp,
+  } = useModalRect({
+    storageKey: "pi-web:packages-modal-rect",
+    defaultWidth: 920,
+    defaultHeight: 640,
+  });
+
   return (
     <div
       style={{
@@ -543,8 +556,13 @@ export function PackagesConfig({
     >
       <div
         style={{
-          width: 920,
-          height: "80vh",
+          position: "absolute",
+          left: modalRect.x,
+          top: modalRect.y,
+          width: modalRect.width,
+          height: modalRect.height,
+          maxWidth: "calc(100vw - 2px)",
+          maxHeight: "calc(100vh - 2px)",
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 10,
@@ -552,10 +570,15 @@ export function PackagesConfig({
           flexDirection: "column",
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
+          boxSizing: "border-box",
         }}
       >
-        {/* Header */}
+        {/* Header (draggable) */}
         <div
+          onPointerDown={handleBarPointerDown}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to move"
           style={{
             display: "flex",
             alignItems: "center",
@@ -564,6 +587,8 @@ export function PackagesConfig({
             padding: "12px 18px",
             borderBottom: "1px solid var(--border)",
             flexShrink: 0,
+            cursor: "move",
+            userSelect: "none",
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -953,6 +978,26 @@ export function PackagesConfig({
             })()}
           </div>
         </div>
+
+        {/* Resize handle — bottom-right */}
+        <div
+          onPointerDown={(e) => { e.stopPropagation(); handleResizePointerDown(e); }}
+          onPointerMove={onModalPointerMove}
+          onPointerUp={onModalPointerUp}
+          title="Drag to resize"
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: 0,
+            width: 18,
+            height: 18,
+            cursor: "nwse-resize",
+            background: "linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 60%, transparent 60%)",
+            opacity: 0.5,
+            borderBottomRightRadius: 9,
+            zIndex: 2,
+          }}
+        />
       </div>
     </div>
   );
