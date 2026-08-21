@@ -47,6 +47,11 @@ const THINKING_SIMILARITY_THRESHOLD = 0.85;
 
 const RPC_EXTENSION_STARTUP_TIMEOUT_MS = 5_000;
 
+/** 会话空闲回收阈值（无事件且无未答 dialog 时销毁 wrapper）。测试/复现可覆写缩短（默认 10 分钟）。 */
+let idleDestroyMs = 10 * 60 * 1000;
+export function __setIdleDestroyMs(ms: number): void {
+	idleDestroyMs = ms;
+}
 // ============================================================================
 // Types
 // ============================================================================
@@ -683,7 +688,19 @@ export class AgentSessionWrapper {
 
 	private resetIdleTimer(): void {
 		if (this.idleTimer) clearTimeout(this.idleTimer);
-		this.idleTimer = setTimeout(() => this.destroy(), 10 * 60 * 1000);
+		// 计时在「回调内」判 pending，而不是上膛时判：agent 发出 question 工具调用的那个
+		// inner 事件已同步触发 resetIdleTimer 上膛，此时 pending 尚未填；到点后再看才是真的。
+		// 有未答 dialog 时绝不 idle 回收：question 等人答是「最不该 destroy」的状态，
+		// 一旦此时 destroy，pending 被 resolve(cancelled:true) 落成 toolResult「User cancelled.」,
+		// 文件里的悬空 question 就被改写成已取消，恢复路径失效，弹窗永久消失。
+		this.idleTimer = setTimeout(() => {
+			if (this.pendingExtensionRequests.size > 0) {
+				// 仍有人等着答：不清 destroy，重排 idle 再等 10 分钟（下次到点仍有未答则再重排）。
+				this.resetIdleTimer();
+				return;
+			}
+			this.destroy();
+		}, idleDestroyMs);
 	}
 
 	/**
