@@ -29,20 +29,23 @@ interface UseResizablePanelOpts {
 
 /** 合并左右两套拖拽调宽逻辑为一个参数化 hook,保留两套真实差异(实时改 CSS 变量 vs 改 state)。 */
 export function useResizablePanel(opts: UseResizablePanelOpts) {
-  const [width, setWidth] = useState<number>(() => {
-    if (opts.storageKey && typeof window !== "undefined") {
-      try {
-        const stored = localStorage.getItem(opts.storageKey);
-        if (stored) return parseInt(stored, 10);
-      } catch { /* localStorage unavailable (privacy mode etc.), fall back to default */ }
-    }
-    return opts.defaultWidth;
-  });
+  // 初始恒用 defaultWidth,避免 SSR 首帧与客户端读 localStorage 后的宽度不同导致 hydration mismatch;
+  // 已存宽度挂载后再读,只改 state 不影响首帧 HTML。
+  const [width, setWidth] = useState<number>(opts.defaultWidth);
   const [dragging, setDragging] = useState(false);
   const draggingRef = useRef(false);
   const widthRef = useRef(width);
   widthRef.current = width;
   const trackerRef = useRef(createSidebarWidthTracker({ min: opts.min, max: opts.max }));
+
+  const storageKey = opts.storageKey;
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) setWidth((w) => (Number.isNaN(parseInt(stored, 10)) ? w : parseInt(stored, 10)));
+    } catch { /* localStorage unavailable, fall back to default */ }
+  }, [storageKey]);
 
   const enabled = opts.enabled !== false;
 

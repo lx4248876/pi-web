@@ -770,15 +770,34 @@ export function SessionSidebar({
 
 	// Session dots update via SSE push from the server (agent start/end across ALL
 	// sessions, including background ones), plus explicit events (session select).
+	// 状态与列表解耦：SSE 带 running 标志。running=true（正在流式跑，3s 心跳）
+	// 只本地补那一个会话的转圈点，不重扫全表；running=false（跑完边沿）才拉
+	// 一次列表拿到终态点。
+	const patchSessionRunning = useCallback((id: string) => {
+		setAllSessions((prev) => {
+			const target = prev.find((s) => s.id === id);
+			if (!target || target.status === "running") return prev; // 未变不产生新数组
+			return prev.map((s) => (s.id === id ? { ...s, status: "running" as const } : s));
+		});
+	}, []);
+
 	useEffect(() => {
 		const es = new EventSource("/api/sessions/events");
 		es.onmessage = (e) => {
-			if (e.data?.includes("session_activity")) {
-				loadSessions(false, { silent: true });
+			let ev: { type?: string; sessionId?: string; running?: boolean } | null = null;
+			try {
+				ev = JSON.parse(e.data);
+			} catch { /* ignore malformed frame */ }
+			if (ev?.type === "session_activity") {
+				if (ev.running) {
+					patchSessionRunning(ev.sessionId ?? "");
+				} else {
+					loadSessions(false, { silent: true });
+				}
 			}
 		};
 		return () => es.close();
-	}, [loadSessions]);
+	}, [loadSessions, patchSessionRunning]);
 
 	const initialLoadDone = useRef(false);
 	useEffect(() => {
@@ -875,12 +894,12 @@ export function SessionSidebar({
 
 	const handleSessionSelect = useCallback(
 		(session: SessionInfo) => {
-			// Viewing the session clears its terminal dot, and refreshes the list.
+			// Viewing the session clears its terminal dot locally. No full-list refetch
+			// here: 切换会话不必重扫全表,列表新鲜度由 SSE 推送维护。
 			markSessionSeen(session.id);
 			onSelectSession(session);
-			loadSessions();
 		},
-		[onSelectSession, loadSessions, markSessionSeen],
+		[onSelectSession, markSessionSeen],
 	);
 
 	// A stream that ends while its session is still open was watched live —

@@ -4,7 +4,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionPath,
   buildSessionContext,
-  listAllSessions,
   invalidateSessionPathCache,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
@@ -29,8 +28,6 @@ export async function GET(
     const header = sm.getHeader();
     let modified = header?.timestamp ?? new Date().toISOString();
     try { modified = statSync(filePath).mtime.toISOString(); } catch { /* use header timestamp */ }
-    const allSessions = await listAllSessions();
-    const parentSessionId = allSessions.find((s) => s.id === id)?.parentSessionId;
     const info = header ? {
       path: filePath,
       id: header.id,
@@ -46,7 +43,6 @@ export async function GET(
             return typeof c === "string" ? c : (Array.isArray(c) ? (c.find((b: { type: string }) => b.type === "text") as { text: string } | undefined)?.text ?? "" : "") || "(no messages)";
           })()
         : "(no messages)",
-      parentSessionId,
     } : null;
 
     const url = new URL(req.url);

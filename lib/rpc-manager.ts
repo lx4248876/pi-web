@@ -478,7 +478,7 @@ export class AgentSessionWrapper {
 		if (!edge && now - this.lastSessionNotifyAt < 3000) return;
 		if (edge) this.lastNotifiedStreaming = streaming;
 		this.lastSessionNotifyAt = now;
-		notifyRpcSessionEventListeners(this.sessionId);
+		notifyRpcSessionEventListeners(this.sessionId, streaming);
 	}
 
 	private lastSessionNotifyAt = 0;
@@ -1427,7 +1427,7 @@ export async function getAllPendingDialogs(
 // 活跃会话有「开始跑/跑完」级别的状态变化时通知订阅者；SSE 路由据此推动前端
 // 刷新会话列表，替代轮询。注册表挂 globalThis 以免 dev-server 热重载后丢失。
 
-type RpcSessionEventListener = (sessionId: string) => void;
+type RpcSessionEventListener = (sessionId: string, running: boolean) => void;
 
 interface RpcSessionEventRegistry {
   listeners: Set<RpcSessionEventListener>;
@@ -1442,10 +1442,10 @@ function getSessionEventRegistry(): RpcSessionEventRegistry {
   return g.__piSessionEventListeners;
 }
 
-function notifyRpcSessionEventListeners(sessionId: string): void {
+function notifyRpcSessionEventListeners(sessionId: string, running: boolean): void {
   for (const l of getSessionEventRegistry().listeners) {
     try {
-      l(sessionId);
+      l(sessionId, running);
     } catch {
       // 一个订阅者出错不影响其余订阅者
     }
