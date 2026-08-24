@@ -53,6 +53,9 @@ async function loadRpcManagerInternals() {
 						{ title: "", question: "", options: [] },
 					],
 				};
+			if (specifier === "./rpc-session-events")
+				return { notifyRpcSessionEventListeners: () => {} };
+			if (specifier === "./rpc-pending-dialogs") return {};
 			throw new Error(`Unexpected require: ${specifier}`);
 		},
 		setTimeout,

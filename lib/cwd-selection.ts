@@ -4,6 +4,17 @@ export interface BrowseValidationResponse {
   error?: string;
 }
 
+export interface BrowseDirEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+}
+
+export interface BrowseDirResponse extends BrowseValidationResponse {
+  entries?: BrowseDirEntry[];
+  requestedPath?: string;
+}
+
 export interface SelectCwdSuccess {
   ok: true;
   cwd: string;

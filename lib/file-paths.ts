@@ -1,4 +1,4 @@
-export function normalizeFilePathSlashes(filePath: string): string {
+function normalizeFilePathSlashes(filePath: string): string {
   if (/^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith("\\\\")) {
     return filePath.replace(/\\/g, "/");
   }

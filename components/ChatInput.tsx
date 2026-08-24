@@ -3,6 +3,12 @@
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import { SkillMenu, type SkillItem } from "./SkillMenu";
 import { AtMentionMenu } from "./AtMentionMenu";
+import { ModelDropdown } from "./chat-input/ModelDropdown";
+import { ToolPresetDropdown } from "./chat-input/ToolPresetDropdown";
+import { ContextUsageBar } from "./chat-input/ContextUsageBar";
+import { TOOL_PRESET_MAP, fmtStats } from "./chat-input/constants";
+import { AttachedImagesStrip } from "./chat-input/AttachedImagesStrip";
+import { SessionStatsBar } from "./chat-input/SessionStatsBar";
 import type { SessionStatsData, ContextUsageData } from "./app-shell/TopBar";
 
 export interface AttachedImage {
@@ -54,14 +60,6 @@ export interface ChatInputHandle {
   addImages: (files: File[]) => void;
 }
 
-const TOOL_PRESETS = ["off", "default", "full"] as const;
-const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
-
-// Token 数简短格式化(e.g. 95000 → 95k, 2400 → 2k, 900 → 900)
-function fmtStats(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
-}
-
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, cwd, model, modelNames, modelList, onModelChange,
   onCompact, onHandoff, onAbortCompaction, isCompacting, compactError,
@@ -97,7 +95,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [mentionMenuQuery, setMentionMenuQuery] = useState("");
   const [mentionMenuRect, setMentionMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [ctxHover, setCtxHover] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -417,34 +414,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           </div>
         )}
         {/* Image previews */}
-        {attachedImages.length > 0 && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-            {attachedImages.map((img, i) => (
-              <div key={i} style={{ position: "relative", flexShrink: 0 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.previewUrl}
-                  alt=""
-                  style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)", display: "block" }}
-                />
-                <button
-                  onClick={() => removeImage(i)}
-                  style={{
-                    position: "absolute", top: -4, right: -4,
-                    width: 16, height: 16, borderRadius: "50%",
-                    background: "var(--bg-panel)", border: "1px solid var(--border)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
-                  }}
-                >
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <AttachedImagesStrip images={attachedImages} onRemove={removeImage} />
 
         {/* Main input */}
         <div
@@ -722,101 +692,23 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     </svg>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{currentName}</span>
                   </button>
-                  {modelDropdownOpen && modelDropdownRect && (() => {
-                    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-                    const bottom = viewportHeight - modelDropdownRect.top + 6;
-                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
-                    return (
-                    <div ref={modelDropdownPanelRef} style={{
-                      position: "fixed",
-                      bottom, left: modelDropdownRect.left,
-                      zIndex: 500, background: "var(--bg)", border: "1px solid var(--border)",
-                      borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                      overflow: "hidden", width: "max-content", minWidth: modelDropdownRect.width, maxHeight: maxH, overflowY: "auto",
-                    }}>
-                      {modelsByProvider.map((group, gi) => (
-                        <div key={group.provider}>
-                          {(modelsByProvider.length > 1) && (
-                            <div style={{
-                              padding: "6px 12px 4px",
-                              fontSize: 10, fontWeight: 600, color: "var(--text-dim)",
-                              textTransform: "uppercase", letterSpacing: "0.07em",
-                              borderTop: gi > 0 ? "1px solid var(--border)" : "none",
-                            }}>
-                              {group.provider}
-                            </div>
-                          )}
-                          {group.options.map((opt) => {
-                            const isActive = opt.modelId === model?.modelId && opt.provider === model?.provider;
-                            return (
-                              <button
-                                key={`${opt.provider}:${opt.modelId}`}
-                                onClick={() => { setModelDropdownOpen(false); if (!isActive) onModelChange(opt.provider, opt.modelId); }}
-                                style={{
-                                  display: "flex", alignItems: "center", gap: 8,
-                                  width: "100%", padding: "7px 12px",
-                                  background: isActive ? "var(--bg-selected)" : "none",
-                                  border: "none",
-                                  color: isActive ? "var(--text)" : "var(--text-muted)",
-                                  cursor: "pointer", fontSize: 12, textAlign: "left",
-                                  fontWeight: isActive ? 600 : 400,
-                                  whiteSpace: "nowrap",
-                                }}
-                                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                              >
-                                {isActive
-                                  ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                                  : <span style={{ width: 10, flexShrink: 0 }} />}
-                                {opt.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                    );
-                  })()}
+                  {modelDropdownOpen && modelDropdownRect && (
+                    <ModelDropdown
+                      rect={modelDropdownRect}
+                      groups={modelsByProvider}
+                      current={model}
+                      panelRef={modelDropdownPanelRef}
+                      onSelect={(provider, modelId) => {
+                        setModelDropdownOpen(false);
+                        onModelChange(provider, modelId);
+                      }}
+                    />
+                  )}
                 </div>
             )}
             {/* Session token/cost stats — right of the model selector */}
-            {sessionStats &&
-              (sessionStats.tokens.input > 0 ||
-                sessionStats.tokens.output > 0 ||
-                sessionStats.tokens.cacheRead > 0 ||
-                (sessionStats.cost ?? 0) > 0) && (
-                <div
-                  style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    marginLeft: 6, paddingLeft: 6,
-                    borderLeft: "1px solid var(--border)",
-                    fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap",
-                    fontVariantNumeric: "tabular-nums", flexShrink: 0, overflow: "hidden",
-                  }}
-                >
-                  {sessionStats.tokens.input > 0 && (
-                    <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`in: ${sessionStats.tokens.input.toLocaleString()}`}>↑{fmtStats(sessionStats.tokens.input)}</span>
-                  )}
-                  {sessionStats.tokens.output > 0 && (
-                    <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`out: ${sessionStats.tokens.output.toLocaleString()}`}>↓{fmtStats(sessionStats.tokens.output)}</span>
-                  )}
-                  {sessionStats.tokens.cacheRead > 0 &&
-                    (() => {
-                      // 缓存命中率：会话累计缓存命中占比，原始 token 数在 hover 里
-                      const total = sessionStats.tokens.input + sessionStats.tokens.cacheRead;
-                      const pct = total > 0 ? Math.round((sessionStats.tokens.cacheRead / total) * 100) : 0;
-                      return <span style={{ display: "flex", alignItems: "center", gap: 3 }} title={`cache read: ${sessionStats.tokens.cacheRead.toLocaleString()}`}>缓存 {pct}%</span>;
-                    })()}
-                  {(sessionStats.cost ?? 0) > 0 && (
-                    <span style={{ fontWeight: 500, color: "var(--text)" }}>
-                      {sessionStats.cost! >= 0.01 ? `$${sessionStats.cost!.toFixed(2)}` : "<$0.01"}
-                    </span>
-                  )}
-                </div>
-              )}
+            <SessionStatsBar stats={sessionStats} fmt={fmtStats} />
           </div>
-
-          {/* spacer */}
           <div style={{ flex: 1 }} />
 
           {/* RIGHT: tools preset + compact + sound (idle) | Stop + sound (streaming) */}
@@ -856,42 +748,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   <span>{Object.entries(TOOL_PRESET_MAP).find(([, v]) => v === (toolPreset ?? "default"))?.[0] ?? "default"}</span>
                 </button>
                 {toolDropdownOpen && (
-                  <div style={{
-                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                    zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
-                    borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 120,
-                  }}>
-                    {TOOL_PRESETS.map((lvl) => {
-                      const preset = TOOL_PRESET_MAP[lvl];
-                      const isActive = (toolPreset ?? "default") === preset;
-                      const desc = lvl === "off" ? "无工具，纯聊天" : lvl === "default" ? "4 项内置工具" : "全部内置工具";
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => { setToolDropdownOpen(false); if (!isActive) onToolPresetChange(preset); }}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            width: "100%", padding: "7px 12px",
-                            background: isActive ? "var(--bg-selected)" : "none",
-                            border: "none",
-                            color: isActive ? "var(--text)" : "var(--text-muted)",
-                            cursor: "pointer", fontSize: 12, textAlign: "left",
-                            fontWeight: isActive ? 600 : 400,
-                            whiteSpace: "nowrap",
-                          }}
-                          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                        >
-                          {isActive
-                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                            : <span style={{ width: 10, flexShrink: 0 }} />}
-                          <span style={{ flex: 1 }}>{lvl}</span>
-                          <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <ToolPresetDropdown
+                    current={toolPreset ?? "default"}
+                    onSelect={(preset) => {
+                      setToolDropdownOpen(false);
+                      onToolPresetChange(preset);
+                    }}
+                  />
                 )}
               </div>
             )}
@@ -1125,80 +988,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         </div>
 
           {/* Context usage — slim cyber gradient line; hover expands to show the value, rendered inside the bar */}
-          {(() => {
-            const windowN = contextUsage?.contextWindow ?? null;
-            const tokensN = contextUsage?.tokens ?? null;
-            const ctxPct = contextUsage?.percent ?? null;
-            const clamped = ctxPct === null ? 0 : Math.max(0, Math.min(100, ctxPct));
-            const label = ctxPct === null
-              ? "context —"
-              : `${ctxPct.toFixed(0)}%` + (windowN ? ` · ${fmtStats(tokensN ?? 0)}/${fmtStats(windowN)}` : "");
-            const title =
-              ctxPct === null
-                ? "context: unavailable yet"
-                : `context ${ctxPct.toFixed(1)}% · ${tokensN != null ? tokensN.toLocaleString() : "?"} / ${windowN != null ? windowN.toLocaleString() : "?"} tokens`;
-            // 科技风霓虹渐变:青→紫→品红→橙
-            const gradient =
-              "linear-gradient(90deg, #22d3ee, #818cf8 30%, #a855f7 52%, #ec4899 74%, #fb923c)";
-            return (
-              <div
-                onMouseEnter={() => setCtxHover(true)}
-                onMouseLeave={() => setCtxHover(false)}
-                title={title}
-                style={{ position: "relative", marginTop: 7, cursor: "default" } as React.CSSProperties}
-              >
-                <div
-                  style={{
-                    position: "relative",
-                    height: ctxHover ? 22 : 4,
-                    borderRadius: 6,
-                    overflow: "hidden",
-                    background: "var(--bg-hover)",
-                    border: ctxHover ? "1px solid var(--border)" : "none",
-                    boxShadow: ctxHover ? "0 0 14px rgba(125,211,252,0.28)" : "none",
-                    transition: "height .18s ease, box-shadow .18s ease",
-                  }}
-                >
-                  {/* 已用填充:霓虹渐变 + 微光 */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      width: `${clamped}%`,
-                      minWidth: 0,
-                      background: gradient,
-                      boxShadow: "0 0 8px rgba(103,232,249,0.35)",
-                      transition: "width .4s ease",
-                    }}
-                  >
-                    {/* 扫描流光 */}
-                    <div
-                      style={{
-                        position: "absolute", top: 0, bottom: 0, width: "55%",
-                        background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.40), transparent)",
-                        animation: "cyber-scan 2.6s linear infinite",
-                      }}
-                    />
-                  </div>
-                  {/* hover 数值直接渲染在进度条内部 */}
-                  {ctxHover && (
-                    <div
-                      style={{
-                        position: "absolute", inset: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: "0.03em",
-                        color: "#fff", whiteSpace: "nowrap", pointerEvents: "none", zIndex: 2,
-                        textShadow: "0 1px 3px rgba(0,0,0,0.45)",
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                    >
-                      {label}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
+          <ContextUsageBar contextUsage={contextUsage} fmt={fmtStats} />
       </div>
     </div>
   );

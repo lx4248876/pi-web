@@ -189,43 +189,6 @@ export class HashlineToolManager {
 }
 
 // ============================================================================
-// 工具定义
-// ============================================================================
-
-export const hashlineReadToolDefinition = {
-  name: "hashline-read",
-  description:
-    "Read a file and return content with hashline header for precise editing",
-  parameters: {
-    type: "object",
-    properties: {
-      path: {
-        type: "string",
-        description: "Path to the file to read",
-      },
-    },
-    required: ["path"],
-  },
-};
-
-export const hashlineEditToolDefinition = {
-  name: "hashline-edit",
-  description:
-    "Edit a file using hashline format for precise, unambiguous references",
-  parameters: {
-    type: "object",
-    properties: {
-      input: {
-        type: "string",
-        description:
-          'Hashline patch input (¶PATH#TAG\\nA B\\n+TEXT)',
-      },
-    },
-    required: ["input"],
-  },
-};
-
-// ============================================================================
 // 工具执行器
 // ============================================================================
 
@@ -312,12 +275,3 @@ export async function executeHashlineEdit(
     };
   }
 }
-
-// ============================================================================
-// 导出给 pi-web 使用
-// ============================================================================
-
-export {
-  NodeFilesystem,
-  getHashlineModule,
-};
