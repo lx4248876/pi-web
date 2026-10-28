@@ -6,18 +6,31 @@
 
 - **运行时**：Node.js（仓库当前用 Node 24，已启用 type-stripping / ESM）。
 - **框架**：Next.js 16 App Router + React 19 + Tailwind v4。
-- **pi 版本**：`@earendil-works/pi-ai` / `pi-coding-agent` **0.81.1**（0.79.1→0.81.1 迁移完成：`AuthStorage`/`ModelRegistry.create` 已移除，改用 `ModelRuntime`；`modelRegistry` → `modelRuntime`）。
+- **pi 版本**：`@earendil-works/pi-ai` / `pi-coding-agent` **1.4.0**（0.81.1→1.4.0 迁移完成：`ModelRuntime.reloadConfig()` 移除 → 用 `refresh({allowNetwork:false})` 重读 models.json 并重建 provider；`agent.state.systemPrompt` 变只读 → Off 预设只关工具不再清提示词；`steer()/followUp()` 返回 `QueuedInputDisposition`；工具 execute ctx 升级为 `ExtensionToolContext`；新增内置 `powershell` 已并入工具名单）。`patches/` 已清空：MSYS 路径补丁上游已修，Gemini thoughtSignature 补丁待真实会话复测后再决定是否重做。
 
 ## 常用命令
 
 | 命令 | 作用 |
 |------|------|
-| `npm run dev` | 启动 dev server（端口 3030） |
+| `npm run dev` | 启动 dev server（`127.0.0.1:3030`，只绑定回环） |
 | `npm test` | 全量测试（原生跑 `.mjs` + 经 jiti 跑 `.ts`） |
 | `node --import jiti/register --test <file>` | 跑单个 `.ts` 测试 |
 | `node_modules/.bin/tsc --noEmit` | 类型检查 |
 | `npm run lint` | ESLint |
 | `npm start` | Next.js 生产预览（端口 30141；会锁定 `@next/swc` 的 `.node`，阻塞其后的 `npm ci/install`） |
+
+## 模型凭据（复用 DSH 的）
+
+pi 的 `~/.pi/agent/models.json` 里 provider 的 `apiKey` 写的是 `$DGRID_*` 这类**环境变量引用**，真值由 DSH 存在 `~/.dsh/.credentials.yaml` 的 `refs:` 段。
+
+服务启动时 `instrumentation.ts`（Next 启动钩子，Node runtime 跑一次）会调用 `lib/dsh-credentials.ts`，把 `refs:` 里的变量补进 `process.env`：
+
+- **不写任何文件**，密钥只存在于进程内存；
+- **已存在的同名变量永不覆盖**（你自己 export 的 key 优先）；
+- 日志只打印变量名与数量，**从不打印密文**；
+- 取消同步：`PI_WEB_SYNC_DSH_CREDENTIALS=0`；换 DSH 目录：`PI_WEB_DSH_HOME`（或 `DSH_HOME`）。
+
+不补这些变量时，pi 会判定所有 provider「未配置」→ `GET /api/models` 返回空列表 → 界面上看不到/切不了模型（**这不是代码缺陷，是缺凭证**）。
 
 > ⚠️ 正常本地工作时**不要**跑 `next build`：它写入 `.next/`，会干扰热更新与本地路径解析。生产预览 `npm start` 会锁定 `@next/swc`，导致其后想 `npm ci`/`npm install` 时因文件被占而 EPERM——此时需先停掉该进程再安装。
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import type { PiPackage } from "@/lib/pi-packages";
+import { copyText } from "@/lib/clipboard";
 
 export function fmtMatches(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
@@ -48,88 +49,48 @@ function TypeTag({ type }: { type: string }) {
   );
 }
 
+/**
+ * 插件详情（**只读**）。
+ *
+ * pi-web 只做「看有什么、装了什么」，安装/卸载一律交给终端（`pi install` /
+ * `pi remove`）。原因：装包要在 pi 进程外生效、并需要重启会话，Web 侧假装能管
+ * 只会出现「装完没生效」。这里给出可复制的命令，比一个假按钮诚实。
+ */
 export function PackageDetail({
   pkg,
-  onInstall,
-  installing,
   installed,
-  installError,
-  onUninstall,
-  uninstalling,
-  uninstallError,
   scope,
 }: {
   pkg: PiPackage;
-  onInstall: () => void;
-  installing: boolean;
   installed: boolean;
-  installError: string | null;
-  onUninstall: () => void;
-  uninstalling: boolean;
-  uninstallError: string | null;
   scope: "global" | "project";
 }) {
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [zhDescription, setZhDescription] = useState<string | null>(null);
-  const [translating, setTranslating] = useState(false);
-  const [translateError, setTranslateError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [translated, setTranslated] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // Auto-reveal a previously cached translation the moment this package's
-  // detail opens — zero extra tokens.
-  useEffect(() => {
-    let cancelled = false;
-    setTranslated(false);
-    setZhDescription(null);
-    setExpanded(false);
-    setTranslateError(null);
-    if (!pkg.name) return;
-    fetch(`/api/packages/translate-desc?name=${encodeURIComponent(pkg.name)}`)
-      .then((r) => r.json())
-      .then((d: { zh?: string | null }) => {
-        if (cancelled) return;
-        if (d.zh) {
-          setZhDescription(d.zh);
-          setExpanded(false);
-          setTranslated(true);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [pkg.name]);
+  const command = `pi install ${pkg.install}${scope === "project" ? " -l" : ""}`;
 
-  const translate = useCallback(async () => {
-    if (translating) return;
-    setTranslating(true);
-    setTranslateError(null);
+  const copy = async () => {
     try {
-      const res = await fetch("/api/packages/translate-desc", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: pkg.name, description: pkg.description }),
-      });
-      const d = (await res.json()) as { zh?: string; error?: string };
-      if (!res.ok || d.error) {
-        setTranslateError(d.error ?? `HTTP ${res.status}`);
-        return;
-      }
-      setZhDescription(d.zh ?? "");
-      setExpanded(false);
-      setTranslated(true);
-    } catch (e) {
-      setTranslateError(String(e));
-    } finally {
-      setTranslating(false);
+      await copyText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // 剪贴板不可用时用户仍可手动选中复制
     }
-  }, [translating, pkg.name, pkg.description]);
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {/* Name + tags + install button */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexDirection: "column" }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
-          {pkg.name}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+            {pkg.name}
+          </span>
+          {installed && (
+            <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(34,197,94,0.12)", color: "rgba(34,197,94,0.85)", whiteSpace: "nowrap" }}>
+              已安装
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           {pkg.types.map((t) => <TypeTag key={t} type={t} />)}
@@ -142,73 +103,17 @@ export function PackageDetail({
         </div>
       </div>
 
-      {/* 描述 */}
       <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>描述</span>
-          {!zhDescription && (
-            <button
-              onClick={translate}
-              disabled={translating}
-              style={{
-                fontSize: 11,
-                padding: "1px 8px",
-                borderRadius: 4,
-                border: "1px solid var(--border)",
-                background: "none",
-                color: translating ? "var(--text-dim)" : "var(--accent)",
-                cursor: translating ? "wait" : "pointer",
-                opacity: translating ? 0.6 : 1,
-              }}
-            >
-              {translating ? "翻译中…" : "翻译成中文"}
-            </button>
-          )}
-        </div>
-        {/* 英文短描述（始终可见，简洁） */}
+        <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>描述</span>
         <p style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.65, marginTop: 5, marginBottom: 0 }}>
           {pkg.description || "无描述"}
         </p>
-        {/* 中文全量翻译（有缓存/已翻译时直接显示，可折叠） */}
-        {zhDescription && (
-          <div style={{ marginTop: 8, background: "rgba(107,159,242,0.08)", border: "1px solid rgba(107,159,242,0.18)", borderRadius: 6, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px" }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)", flexShrink: 0 }}>
-                {translated ? "中文说明" : "中文翻译"}
-              </span>
-              <span style={{ fontSize: 10, color: "var(--text-dim)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {zhDescription.length} 字{translated ? " · 已缓存" : ""}
-              </span>
-              <button
-                onClick={() => setExpanded((v) => !v)}
-                style={{ fontSize: 11, padding: "1px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer" }}
-              >
-                {expanded ? "收起" : "展开"}
-              </button>
-            </div>
-            <div style={{ padding: "0 10px 8px" }}>
-              {expanded ? (
-                <pre
-                  style={{ fontSize: 12.5, color: "var(--text)", lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit" }}
-                >
-                  {zhDescription}
-                </pre>
-              ) : (
-                <p style={{ fontSize: 12.5, color: "var(--text)", lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>
-                  {zhDescription.length > 300 ? zhDescription.slice(0, 300) + "…" : zhDescription}
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-        {translateError && (
-          <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{translateError}</div>
-        )}
       </div>
 
-      {/* 安装命令 */}
       <div>
-        <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>安装命令</span>
+        <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>
+          {installed ? "已安装" : "在终端执行"}
+        </span>
         <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
           <code
             style={{
@@ -225,103 +130,30 @@ export function PackageDetail({
               whiteSpace: "nowrap",
             }}
           >
-            $ pi install {pkg.install}
+            $ {command}
           </code>
-          {installed ? (
-            confirmRemove ? (
-              <>
-                <button
-                  onClick={onUninstall}
-                  disabled={uninstalling}
-                  style={{
-                    flexShrink: 0,
-                    padding: "7px 14px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    borderRadius: 6,
-                    border: "none",
-                    cursor: uninstalling ? "not-allowed" : "pointer",
-                    background: "#dc2626",
-                    color: "#fff",
-                    opacity: uninstalling ? 0.7 : 1,
-                  }}
-                >
-                  {uninstalling ? "卸载中…" : "确认卸载"}
-                </button>
-                <button
-                  onClick={() => setConfirmRemove(false)}
-                  disabled={uninstalling}
-                  style={{
-                    flexShrink: 0,
-                    padding: "7px 12px",
-                    fontSize: 13,
-                    borderRadius: 6,
-                    border: "1px solid var(--border)",
-                    background: "none",
-                    color: "var(--text-muted)",
-                    cursor: uninstalling ? "not-allowed" : "pointer",
-                  }}
-                >
-                  取消
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => setConfirmRemove(true)}
-                style={{
-                  flexShrink: 0,
-                  padding: "7px 16px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  borderRadius: 6,
-                  border: "1px solid var(--border)",
-                  background: "rgba(220,38,38,0.08)",
-                  color: "#f87171",
-                  cursor: "pointer",
-                }}
-              >
-                卸载
-              </button>
-            )
-          ) : (
-            <button
-              onClick={onInstall}
-              disabled={installing}
-              style={{
-                flexShrink: 0,
-                padding: "7px 16px",
-                fontSize: 13,
-                fontWeight: 500,
-                borderRadius: 6,
-                border: "none",
-                cursor: installing ? "not-allowed" : "pointer",
-                background: "var(--accent)",
-                color: "#fff",
-                opacity: installing ? 0.8 : 1,
-              }}
-            >
-              {installing ? "安装中…" : "安装"}
-            </button>
-          )}
+          <button
+            onClick={copy}
+            style={{
+              flexShrink: 0,
+              padding: "7px 12px",
+              fontSize: 13,
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "none",
+              color: copied ? "var(--accent)" : "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            {copied ? "已复制" : "复制"}
+          </button>
         </div>
         <div style={{ marginTop: 5, fontSize: 11, color: "var(--text-dim)" }}>
           {scope === "global" ? "→ 全局（~/.pi/agent，所有项目可用）" : "→ 项目级（当前目录 .pi）"}
+          {installed ? "　卸载：pi remove <包名>" : "　装完请重启 pi-web 会话以加载新扩展"}
         </div>
       </div>
 
-      {installError && (
-        <div style={{ fontSize: 12, color: "#f87171", wordBreak: "break-word", maxHeight: 120, overflowY: "auto", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap" }}>
-          {installError}
-        </div>
-      )}
-
-      {uninstallError && (
-        <div style={{ fontSize: 12, color: "#f87171", wordBreak: "break-word", maxHeight: 120, overflowY: "auto", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 6, padding: "8px 10px" }}>
-          {uninstallError}
-        </div>
-      )}
-
-      {/* Links */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", paddingTop: 4 }}>
         {pkg.npmUrl && (
           <a href={pkg.npmUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>

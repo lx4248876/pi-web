@@ -555,6 +555,7 @@ export function SkillsConfig({
         body: JSON.stringify({
           filePath: skill.filePath,
           disableModelInvocation: next,
+          cwd,
         }),
       });
       const d = (await res.json()) as { success?: boolean; error?: string };
@@ -578,7 +579,7 @@ export function SkillsConfig({
         return n;
       });
     }
-  }, []);
+  }, [cwd]);
 
   const selectedSkill = skills.find((s) => s.filePath === selected) ?? null;
 

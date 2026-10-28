@@ -1,5 +1,6 @@
 import { isChildSessionPath, resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
+import { SseWriter } from "@/lib/sse-writer";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
@@ -34,35 +35,33 @@ export async function GET(
 
   const stream = new ReadableStream({
     start(controller) {
-      const encode = (data: unknown) => {
-        const text = `data: ${JSON.stringify(data)}\n\n`;
-        controller.enqueue(new TextEncoder().encode(text));
-      };
-
-      // Send initial connected event
-      encode({ type: "connected", sessionId: id });
+      // SseWriter 吞掉「controller 已关闭」的 enqueue 异常并闩住 closed：
+      // 这个回调会在 wrapper.emit()（pi SDK 同步事件分发）里被执行，抛出去会
+      // 打断同一次 emit 的其余监听器。
+      const writer = new SseWriter(controller);
 
       const unsubscribe = session.onEvent((event) => {
-        encode(event);
+        writer.send(event);
       });
+
+      writer.send({ type: "connected", sessionId: id });
 
       // Heartbeat every 30s to prevent server/proxy timeout (Next.js default ~120-150s)
       const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(new TextEncoder().encode(":\n\n"));
-        } catch {
-          // controller already closed
-        }
+        writer.sendHeartbeat();
       }, 30_000);
 
-      // Cleanup when client disconnects
+      // Cleanup is idempotent: abort can fire after the stream was closed, and
+      // the heartbeat timer must never outlive the connection.
+      let cleanedUp = false;
       const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         clearInterval(heartbeat);
         unsubscribe();
-        controller.close();
+        writer.close();
       };
 
-      // Detect client disconnect via abort signal
       req.signal?.addEventListener("abort", cleanup);
     },
   });

@@ -23,7 +23,10 @@
 // show up as a duplicate "ask user" tool to the model.
 export const COMPAT_UI_TOOL_NAMES = ["question"] as const;
 
-// The seven built-in coding tools pi-web exposes via presets.
+// The built-in coding tools pi-web exposes via presets.
+// `powershell` is pi 1.4.0's native Windows shell tool: it must be listed here,
+// otherwise it would be classified as an *extension* tool and silently switched
+// on for every non-Off preset.
 export const CODING_TOOL_NAMES = [
     "read",
     "bash",
@@ -32,6 +35,7 @@ export const CODING_TOOL_NAMES = [
     "grep",
     "find",
     "ls",
+    "powershell",
 ] as const;
 
 // Every tool name that is NOT user-toggled via a preset. Used to separate

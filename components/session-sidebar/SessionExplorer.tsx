@@ -132,8 +132,8 @@ export function SessionExplorer({
 										const data = await res.json();
 										alert(`Failed to open folder: ${data.error}`);
 									}
-								} catch (err: any) {
-									alert(`Failed to open folder: ${err.message || err}`);
+								} catch (err: unknown) {
+									alert(`Failed to open folder: ${err instanceof Error ? err.message : String(err)}`);
 								}
 							}}
 							title="Open folder in system explorer"
@@ -252,3 +252,4 @@ export function SessionExplorer({
 		</>
 	);
 }
+

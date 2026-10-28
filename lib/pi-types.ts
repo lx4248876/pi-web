@@ -22,6 +22,9 @@ export interface NavigateTreeResult {
   aborted?: boolean;
 }
 
+/** pi 1.4.0: steer()/followUp() 返回该输入是立即处理还是排队，而不是 void。 */
+export type QueuedInputDisposition = "handled" | "queued";
+
 export interface AgentSessionLike {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
@@ -30,11 +33,11 @@ export interface AgentSessionLike {
   readonly autoCompactionEnabled: boolean;
   readonly autoRetryEnabled: boolean;
   readonly model: ModelLike | undefined;
-  // 0.81.1：AgentSession.modelRegistry 已移除，改暴露 modelRuntime
+  // pi 1.4.0：AgentSession.modelRegistry 早已移除（0.81 起暴露 modelRuntime）；
+  // reloadConfig() 也在 1.x 被删除 —— 重载 models.json 改走 refresh()。
   readonly modelRuntime: {
     getModel: (provider: string, modelId: string) => ModelLike | undefined;
     refresh: (options?: { allowNetwork?: boolean }) => Promise<unknown>;
-    reloadConfig: () => Promise<void>;
   };
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
@@ -50,8 +53,8 @@ export interface AgentSessionLike {
   compact(customInstructions?: string): Promise<unknown>;
   setAutoCompactionEnabled(enabled: boolean): void;
   setAutoRetryEnabled(enabled: boolean): void;
-  steer(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void>;
-  followUp(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void>;
+  steer(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<QueuedInputDisposition>;
+  followUp(text: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<QueuedInputDisposition>;
   getAllTools(): ToolInfo[];
   getActiveToolNames(): string[];
   setActiveToolsByName(names: string[]): void;

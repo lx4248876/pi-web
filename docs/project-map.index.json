@@ -2,7 +2,7 @@
   "base_ref": "4b9c0c8",
   "updated": "2026-08-24",
   "entries": [
-    { "path": "app/", "type": "dir", "role": "Next.js App Router：主聊天页 + 演示页 + 全部服务端 API 路由", "chains": ["会话执行", "会话浏览", "待答问题", "Git panel", "模型/Auth", "文件/产物查看", "技能/扩展管理", "CWD/启动恢复", "系统操作"] },
+    { "path": "app/", "type": "dir", "role": "Next.js App Router：主聊天页 + 全部服务端 API 路由", "chains": ["会话执行", "会话浏览", "待答问题", "Git panel", "模型/Auth", "文件/产物查看", "技能/扩展管理", "CWD/启动恢复", "系统操作"] },
     { "path": "app/api/agent/", "type": "src", "role": "会话创建/消息/SSE 事件路由", "chains": ["会话执行"] },
     { "path": "app/api/sessions/", "type": "src", "role": "会话列表/详情/context/events 路由", "chains": ["会话浏览"] },
     { "path": "app/api/pending-questions/route.ts", "type": "src", "role": "返回未答弹窗（按会话分组）", "chains": ["待答问题"] },
@@ -12,11 +12,9 @@
     { "path": "app/api/artifacts/", "type": "src", "role": "产物列表路由", "chains": ["文件/产物查看"] },
     { "path": "app/api/blobs/[hash]/route.ts", "type": "src", "role": "按 hash 取产物 blob", "chains": ["文件/产物查看"] },
     { "path": "app/api/skills/", "type": "src", "role": "技能检索/安装路由", "chains": ["技能/扩展管理"] },
-    { "path": "app/api/packages/", "type": "src", "role": "pi 包管理路由", "chains": ["技能/扩展管理"] },
+    { "path": "app/api/packages/", "type": "src", "role": "pi 包市场/已安装列表（只读）", "chains": ["技能/扩展管理"] },
     { "path": "app/api/browse-dirs/", "type": "src", "role": "目录浏览/校验路由", "chains": ["CWD/启动恢复"] },
     { "path": "app/api/ui-state/", "type": "src", "role": "UI 状态读写路由", "chains": ["系统操作"] },
-    { "path": "app/api/hashline/", "type": "src", "role": "hashline 演示后端", "chains": ["Hashline 演示"] },
-    { "path": "app/api/safe-edit/", "type": "src", "role": "safe-edit 演示后端", "chains": ["Safe-edit 演示"] },
     { "path": "components/", "type": "dir", "role": "React UI 组件；根目录主面板 + 大文件拆分产物子目录 + app-shell 布局", "chains": ["会话执行", "会话浏览"] },
     { "path": "components/AppShell.tsx", "type": "src", "role": "应用布局壳：TopBar/SidebarPanel/ChatWindow/RightPanel 组装", "chains": ["会话执行"] },
     { "path": "components/SessionSidebar.tsx", "type": "src", "role": "会话列表面板容器（984 行：状态/排序/持久化/组合子件）", "chains": ["会话浏览", "待答问题", "CWD/启动恢复"] },
@@ -62,12 +60,11 @@
     { "path": "lib/models-config-test-connection.ts", "type": "src", "role": "模型连接测试逻辑", "chains": ["模型/Auth"] },
     { "path": "lib/html-preview-theme.ts", "type": "src", "role": "产物 HTML 预览主题", "chains": ["文件/产物查看"] },
     { "path": "lib/skills-cache.ts", "type": "src", "role": "技能列表缓存", "chains": ["技能/扩展管理"] },
-    { "path": "lib/pi-packages.ts", "type": "src", "role": "pi 包元数据解析/筛选/排序", "chains": ["技能/扩展管理"] },
+    { "path": "lib/pi-packages.ts", "type": "src", "role": "pi 包市场抓取 + 本机已安装列表解析", "chains": ["技能/扩展管理"] },
     { "path": "lib/npx.ts", "type": "src", "role": "npx 检索/安装封装", "chains": ["技能/扩展管理"] },
     { "path": "lib/pi-exec.ts", "type": "src", "role": "pi/npx 命令执行封装", "chains": ["技能/扩展管理"] },
     { "path": "lib/subagent-live.ts", "type": "src", "role": "子代理实时事件流", "chains": ["技能/扩展管理"] },
     { "path": "lib/normalize.ts", "type": "src", "role": "会话事件/消息规范化", "chains": ["会话浏览"] },
-    { "path": "lib/hashline-tool.ts", "type": "src", "role": "hashline 工具（已删死导出，仅客户端函数）", "chains": ["Hashline 演示"] },
     { "path": "tests/", "type": "test", "role": "134 个测试：核心门禁（会话状态恢复/死锁/待答重建/压缩阈值等）", "chains": ["会话执行", "待答问题", "模型/Auth"] },
     { "path": "docs/", "type": "config", "role": "本图 + adr/specs/change-explainers", "chains": [] },
     { "path": "bin/", "type": "src", "role": "pi-web CLI 入口", "chains": [] },
@@ -75,3 +72,4 @@
     { "path": "AGENTS.md", "type": "config", "role": "每轮加载的项目约定（含机器门禁）", "chains": [] }
   ]
 }
+

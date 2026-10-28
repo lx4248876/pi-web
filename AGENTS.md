@@ -13,7 +13,7 @@ Keep this file short: it is loaded into every agent turn for this project.
 - Type check: `node_modules/.bin/tsc --noEmit`.
 - Lint: `npm run lint`.
 - Tests: `npm test`（原生 `.mjs` + 经 jiti 的 `.ts`；新增 `.ts` 测试需 `node --import jiti/register --test`）。
-- Package manager is **npm**. Do not use `bun install`/`bun.lock` in this repo: the `postinstall: patch-package` step (in `patches/`) only runs under npm, and skipping it silently drops the MSYS-path and other dependency patches.
+- Package manager is **npm**. Do not use `bun install`/`bun.lock` in this repo: the `postinstall: patch-package` hook only runs under npm. `patches/` is currently empty (the 0.81.1 MSYS-path and Gemini thoughtSignature patches were dropped in the pi 1.4.0 upgrade), so nothing is patched today — when re-adding a patch, match the exact package version or every `npm ci` fails.
 - Do not run `next build` during normal local agent work. It writes `.next/` output that can confuse hot reload and local path resolution.
 
 ## Browser Verification（浏览器/页面验收）

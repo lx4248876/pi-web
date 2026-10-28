@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { loadSkillsCached, clearSkillsCache } from "@/lib/skills-cache";
+import { findAllowedSkillFile } from "@/lib/skills-edit-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -24,14 +25,30 @@ export async function GET(req: Request) {
 }
 
 // PATCH /api/skills — toggle disable-model-invocation on a SKILL.md file
+//
+// SECURITY: the target must be one of the SKILL.md files the caller could see in
+// the loaded skill list for `cwd`. Accepting a client-supplied absolute path made
+// this an arbitrary-file-write primitive (settings.json, shell rc files, ...).
 export async function PATCH(req: Request) {
   try {
-    const body = await req.json() as { filePath: string; disableModelInvocation: boolean };
-    const { filePath, disableModelInvocation } = body;
+    const body = await req.json() as { filePath?: string; disableModelInvocation?: boolean; cwd?: string };
+    const { filePath, disableModelInvocation, cwd } = body;
     if (!filePath) return NextResponse.json({ error: "filePath required" }, { status: 400 });
-    if (!existsSync(filePath)) return NextResponse.json({ error: "file not found" }, { status: 404 });
+    if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
 
-    const content = readFileSync(filePath, "utf8");
+    const { skills } = await loadSkillsCached(cwd);
+    const allowedFiles = (skills as Array<{ filePath?: string }>)
+      .map((s) => s.filePath)
+      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const target = findAllowedSkillFile(filePath, allowedFiles);
+    if (!target) {
+      return NextResponse.json(
+        { error: "filePath is not a loaded skill file for this cwd" },
+        { status: 403 },
+      );
+    }
+
+    const content = readFileSync(target, "utf8");
     const key = "disable-model-invocation";
 
     // Use parseFrontmatter to check current value, then do a surgical line edit
@@ -50,7 +67,7 @@ export async function PATCH(req: Request) {
       updated = content.replace(new RegExp(`^${key}\\s*:.*\\r?\\n`, "m"), "");
     }
 
-    writeFileSync(filePath, updated, "utf8");
+    writeFileSync(target, updated, "utf8");
     // Toggling a skill changes what shows in loadSkillsCached's scan; drop the
     // cache so the next GET reflects the change immediately.
     clearSkillsCache();

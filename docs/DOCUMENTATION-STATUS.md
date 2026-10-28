@@ -1,127 +1,65 @@
 # 文档维护状态
 
-## 📊 文档完整性检查
+## 📊 当前文档清单
 
-### ✅ 已完成的文档
+### ✅ 有效文档
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| `docs/README.md` | ✅ 完成 | 文档目录和导航 |
-| `docs/development.md` | ✅ 完成 | 开发与调试指南（命令/测试/调试产物目录） |
-| `docs/bug-audit-report.md` | ✅ 完成 | 全面 bug 排查报告（含修复状态） |
-| `docs/change-explainers/2026-08-13-bug-fixes.html` | ✅ 完成 | 修复讲解页 |
-| `docs/hashline.md` | ✅ 完成 | Hashline 编辑系统使用指南 |
-| `docs/hashline-integration-complete.md` | ✅ 完成 | Hashline 集成完成文档 |
-| `docs/safe-edit.md` | ✅ 完成 | 安全编辑系统使用指南 |
-| `docs/error-handling.md` | ✅ 完成 | 聊天错误提示 |
-| `docs/git-panel.md` | ✅ 完成 | Git 面板设计文档 |
-| `docs/sidebar-design.md` | ✅ 完成 | 侧边栏设计文档 |
-| `docs/integration-roadmap.md` | ✅ 完成 | 集成路线图 |
-| `docs/oh-my-pi-integration-opportunities.md` | ✅ 完成 | oh-my-pi 集成机会 |
-| `docs/optimization-plan.md` | ✅ 完成 | 优化计划 |
-| `AGENTS.md` | ✅ 完成 | 架构文档 |
-| `README.md` | ✅ 完成 | 项目概述 |
+| `README.md`（仓库根） | ✅ 有效 | 项目概述 |
+| `AGENTS.md` | ✅ 有效 | 代理工作约定 + 关键实现陷阱 |
+| `docs/README.md` | ✅ 有效 | 文档目录和导航 |
+| `docs/capability-boundaries.md` | ✅ 有效 | 能力边界 / 否决清单（A 定位） |
+| `docs/project-map.md` + `.index.json` | ✅ 有效 | 结构地图（`codemap` 技能可重生成） |
+| `docs/development.md` | ✅ 有效 | 开发与调试指南 |
+| `docs/audit-report-2026-10.md` | ✅ 有效 | 生产就绪审查 + 修复记录 |
+| `docs/bug-audit-report.md` | ✅ 有效 | 早期 bug 排查记录（历史） |
+| `docs/error-handling.md` | ✅ 有效 | 聊天错误提示 |
+| `docs/git-panel.md` | ✅ 有效 | Git 面板设计 |
+| `docs/sidebar-design.md` | ✅ 有效 | 侧边栏设计 |
+| `docs/optimization-plan.md` | ✅ 有效 | 优化计划 |
+| `docs/change-explainers/*.html` | ✅ 有效 | 修复讲解页（历史归档） |
 
-### 📁 文档结构
+### 🗑 已删除（随功能下线，勿再引用）
+
+| 已删文档 | 删除原因 |
+|----------|----------|
+| `docs/hashline.md` | hashline 整链下线 |
+| `docs/hashline-integration-summary.md` | 同上 |
+| `docs/hashline-integration-complete.md` | 同上 |
+| `docs/safe-edit.md` | safe-edit 整链下线 |
+| `docs/integration-roadmap.md` | 内容停留在 pi 0.76.0 |
+| `docs/oh-my-pi-integration-opportunities.md` | 同上 |
+
+## 📁 文档结构
 
 ```
 pi-web/
-├── AGENTS.md                           # 架构文档
-├── README.md                           # 项目概述
+├── AGENTS.md                     # 代理工作约定 + 实现陷阱
+├── README.md                     # 项目概述
 └── docs/
-    ├── README.md                       # 文档目录
-    ├── development.md                  # 开发与调试指南
-    ├── bug-audit-report.md             # 全面 bug 排查报告
-    ├── change-explainers/              # 修复讲解页
-    ├── hashline.md                     # Hashline 使用指南
-    ├── hashline-integration-complete.md # Hashline 集成完成
-    ├── safe-edit.md                    # 安全编辑使用指南
-    ├── git-panel.md                    # Git 面板设计
-    ├── sidebar-design.md               # 侧边栏设计
-    ├── integration-roadmap.md          # 集成路线图
-    ├── oh-my-pi-integration-opportunities.md  # 集成机会
-    ├── optimization-plan.md            # 优化计划
-    └── DOCUMENTATION-STATUS.md         # 文档维护状态
+    ├── README.md                 # 文档目录
+    ├── capability-boundaries.md  # 能力边界（不做什么）
+    ├── project-map.md            # 结构地图
+    ├── project-map.index.json    # 机器可读索引
+    ├── development.md            # 开发与调试指南
+    ├── audit-report-2026-10.md   # 生产就绪审查 + 修复记录
+    ├── bug-audit-report.md       # 早期 bug 排查记录
+    ├── error-handling.md         # 聊天错误提示
+    ├── git-panel.md              # Git 面板设计
+    ├── sidebar-design.md         # 侧边栏设计
+    ├── optimization-plan.md      # 优化计划
+    ├── change-explainers/        # 修复讲解页
+    └── DOCUMENTATION-STATUS.md   # 本文件
 ```
 
-## 🎯 文档质量
+## 📝 维护规则
 
-### 1. Hashline 编辑系统文档
-
-**覆盖内容：**
-- ✅ 概述和核心优势
-- ✅ 安装说明
-- ✅ 使用方法（React Hook、API、客户端）
-- ✅ Hashline 格式说明
-- ✅ API 参考
-- ✅ 性能对比
-- ✅ 参考资源
-
-**质量评分：** ⭐⭐⭐⭐⭐ (5/5)
-
-### 2. 安全编辑系统文档
-
-**覆盖内容：**
-- ✅ 概述和核心功能
-- ✅ 关键文件列表
-- ✅ 使用方法（React Hook、API）
-- ✅ API 参考
-- ✅ 工作流程
-- ✅ 最佳实践
-- ✅ 故障恢复
-
-**质量评分：** ⭐⭐⭐⭐⭐ (5/5)
-
-### 3. 架构文档（AGENTS.md）
-
-**覆盖内容：**
-- ✅ 系统设计
-- ✅ 会话生命周期
-- ✅ 关键实现陷阱
-- ✅ 高级算法
-- ✅ API 参考
-- ✅ CSS 变量
-- ✅ Tauri 集成
-
-**质量评分：** ⭐⭐⭐⭐⭐ (5/5)
-
-## 📝 文档维护建议
-
-### 1. 定期更新
-
-- 功能变更时同步更新文档
-- 新增功能时创建对应文档
-- 删除功能时移除过时文档
-
-### 2. 文档规范
-
-- 使用统一的 Markdown 格式
-- 包含清晰的标题和章节
-- 提供完整的代码示例
-- 添加必要的截图或图表
-
-### 3. 文档审查
-
-- 定期审查文档准确性
-- 检查链接是否有效
-- 验证代码示例是否可运行
-- 收集用户反馈并改进
-
-## 🚀 演示页面
-
-| 页面 | 说明 | 状态 |
-|------|------|------|
-| `/hashline-demo` | Hashline 编辑演示 | ✅ 可用 |
-| `/safe-edit-demo` | 安全编辑演示 | ✅ 可用 |
-
-## 📚 参考资源
-
-- [Markdown 语法指南](https://www.markdownguide.org/basic-syntax/)
-- [文档编写最佳实践](https://google.github.io/styleguide/docguide/best_practices.html)
-- [API 文档规范](https://swagger.io/specification/)
+1. **功能删除时文档必须同批删除**——文档广告不存在的能力，比没有文档更伤。
+2. 新增能力时，先在 `docs/capability-boundaries.md` 里确认它属于「呈现 pi 已有的东西」，再写文档。
+3. 结构变动后重跑 `codemap` 刷新 `project-map.md` / `project-map.index.json`。
+4. 文档里的路径与命令要能直接复制运行；验证方式写「实测」而不是「应该可以」。
 
 ---
 
-**文档维护状态：✅ 完整** 
-
-所有功能都有对应的文档，文档质量良好，可以满足开发和使用需求。
+**维护状态：✅ 与代码一致（2026-10-28 复核）**

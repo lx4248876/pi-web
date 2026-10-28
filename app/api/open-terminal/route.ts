@@ -37,7 +37,7 @@ export async function POST(req: Request) {
                 child.unref();
 
                 // Listen for ENOENT errors (e.g. Windows Terminal is not installed)
-                child.on("error", (err: any) => {
+                child.on("error", (err: NodeJS.ErrnoException) => {
                     if (err.code === "ENOENT") {
                         console.log(
                             "Windows Terminal (wt) not found. Falling back to pwsh...",
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
                 });
                 child.unref();
 
-                child.on("error", (err: any) => {
+                child.on("error", (err: NodeJS.ErrnoException) => {
                     if (err.code === "ENOENT") {
                         console.log(
                             "x-terminal-emulator not found. Trying gnome-terminal...",
@@ -109,10 +109,11 @@ export async function POST(req: Request) {
         }
 
         return NextResponse.json({success: true});
-    } catch (e: any) {
+    } catch (e: unknown) {
         return NextResponse.json(
-            {error: e.message || String(e)},
+            {error: e instanceof Error ? e.message : String(e)},
             {status: 500},
         );
     }
 }
+

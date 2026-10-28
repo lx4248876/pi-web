@@ -1,7 +1,4 @@
 import { runPi } from "./pi-exec";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
 
 export interface PiPackage {
   name: string;
@@ -146,6 +143,11 @@ export interface InstalledPackage {
  */
 export async function listInstalledPackages(): Promise<InstalledPackage[]> {
   const { stdout } = await runPi(["list"], { timeout: 20_000 });
+  return parseInstalledPackages(stdout);
+}
+
+/** 纯解析：把 `pi list` 的 stdout 变成已安装包列表（见 tests/pi-packages-parse.test.ts）。 */
+export function parseInstalledPackages(stdout: string): InstalledPackage[] {
   const out: InstalledPackage[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const t = line.trim();
@@ -175,107 +177,7 @@ export async function listInstalledPackages(): Promise<InstalledPackage[]> {
 
     if (t) out.push({ source: t, name: t });
   }
-  return out;
-}
-
-/**
- * Remove (uninstall) a pi package. Defaults to global scope; `project` passes -l.
- */
-export async function removePiPackage(pkg: string, scope: "global" | "project" = "global"): Promise<string> {
-  const source = pkg.includes(":") ? pkg : `npm:${pkg}`;
-  const args = scope === "project" ? ["remove", source, "-l"] : ["remove", source];
-  const { stdout, stderr } = await runPi(args, { timeout: 60_000 });
-  return (stdout + stderr).replace(/\x1B\[[0-9;]*m/g, "");
-}
-
-// ── Chinese description cache (仅看详情时翻译 + 本地持久化) ──
-// Cache file lives under the pi agent dir so translations persist across web
-// reloads and sessions. Each entry stores the English source + Chinese
-// translation, so a translated package shows Chinese immediately on next open
-// (no repeat model call).
-const DESC_CACHE_FILE = join(homedir(), ".pi", "agent", "packages-desc-cache.json");
-
-interface DescCacheEntry {
-  zh: string;
-  ts: number;
-  // English source that was translated. When present and identical to the
-  // current source, the cached zh is valid even if the package updated — we can
-  // key correctness on the source text itself.
-  en?: string;
-  // whether this came from the full npm README (true) or just the short desc
-  source?: "readme" | "desc";
-}
-
-type DescCache = Record<string, DescCacheEntry>;
-
-function loadDescCache(): DescCache {
-  try {
-    if (existsSync(DESC_CACHE_FILE)) {
-      return JSON.parse(readFileSync(DESC_CACHE_FILE, "utf8")) as DescCache;
-    }
-  } catch {
-    // corrupt or unreadable — treat as empty
-  }
-  return {};
-}
-
-function saveDescCache(cacheData: DescCache): void {
-  try {
-    mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
-    writeFileSync(DESC_CACHE_FILE, JSON.stringify(cacheData, null, 2), "utf8");
-  } catch {
-    // non-fatal: cache is best-effort
-  }
-}
-
-/**
- * Return the cached Chinese translation for a package, if any. Returns null
- * when nothing is cached (caller should then offer the translate button).
- */
-export function getCachedZhDescription(name: string): string | null {
-  const entry = loadDescCache()[name];
-  return entry && entry.zh ? entry.zh : null;
-}
-
-/** Persist a freshly-translated Chinese description (optionally with English source + kind). */
-export function setCachedZhDescription(
-  name: string,
-  zh: string,
-  opts: { en?: string; source?: "readme" | "desc" } = {},
-): void {
-  const cacheData = loadDescCache();
-  cacheData[name] = {
-    zh,
-    ts: Date.now(),
-    ...(opts.en ? { en: opts.en } : {}),
-    ...(opts.source ? { source: opts.source } : {}),
-  };
-  saveDescCache(cacheData);
-}
-
-/**
- * Fetch the full npm README for a package, falling back to the short
- * description from the pi.dev card when the registry has no readme.
- * Returns { readme, description } — readme is null when unavailable.
- */
-export async function fetchNpmInfo(name: string): Promise<{ readme: string | null; description: string }> {
-  const trimmed = name.trim().replace(/^npm:/, "");
-  const desc = "";
-  try {
-    const enc = trimmed.startsWith("@")
-      ? trimmed.replace("/", "%2F")
-      : encodeURIComponent(trimmed);
-    const res = await fetch(`https://registry.npmjs.org/${enc}`, { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as { readme?: string; description?: string };
-      const readme = (data.readme ?? "").trim();
-      return {
-        readme: readme.length > 0 ? readme : null,
-        description: (data.description ?? "").trim() || desc,
-      };
-    }
-  } catch {
-    // network error — fall back below
-  }
-  return { readme: null, description: desc };
+  // `pi list` 在没有任何包时输出的是一句人话（"No packages installed."），
+  // 不是包名。不过滤的话界面会显示出一个叫这名字的假插件。
+  return out.filter((p) => !/^no packages installed\.?$/i.test(p.name ?? p.source));
 }

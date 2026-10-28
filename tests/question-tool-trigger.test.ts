@@ -5,12 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 // 用相对路径导入：jiti 不解析 tsconfig 的 @/ 别名
 import { createCompatUiTools, startRpcSession } from "../lib/rpc-manager";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 
 // question 工具的 execute 只读 ctx.ui；这里用真实 session 的 UI 上下文，
 // 其余字段对本次触发测试无意义，仅做类型补全。
 function uiCtx(ui: { select: unknown; multiple: unknown; input: unknown; confirm: unknown; notify: unknown }) {
-	return { ui } as unknown as ExtensionContext;
+	// pi 1.4.0：工具 execute 的 ctx 从 ExtensionContext 升级为 ExtensionToolContext
+	// （新增 tools / executeTool）。这里只关心 ui.* 通道，其余字段给最小桩。
+	return {
+		ui,
+		tools: [],
+		executeTool: async () => ({ content: [], isError: true }),
+	} as unknown as ExtensionToolContext;
 }
 
 function setup() {

@@ -9,6 +9,8 @@ const path = require("path");
 const fs = require("fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { parseArgs } = require("util");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { resolveServerArgs } = require("./server-args.js");
 
 const pkgDir = path.join(__dirname, "..");
 const nextDir = path.join(pkgDir, ".next");
@@ -36,16 +38,19 @@ const { values: cliArgs } = parseArgs({
   strict: false,
 });
 
-const port     = cliArgs.port     ?? process.env.PORT     ?? "30141";
-const hostname = cliArgs.hostname ?? process.env.HOSTNAME ?? null;
+// Defaults to loopback on purpose: this server exposes unauthenticated /api
+// routes that write files and run git commands. Expose it to the LAN only via
+// an explicit `--hostname` / `PI_WEB_HOST` (see bin/server-args.js).
+const { port, hostname, nextArgs } = resolveServerArgs({
+  cliPort: cliArgs.port,
+  cliHost: cliArgs.hostname,
+  env: process.env,
+});
 
 if (!fs.existsSync(nextDir)) {
   console.error("Build artifacts not found. Please report this issue.");
   process.exit(1);
 }
-
-const nextArgs = ["start", "-p", port];
-if (hostname) nextArgs.push("-H", hostname);
 
 // Always run next's JS entry with node directly — avoids .bin symlink issues
 // and path-with-spaces problems on Windows when shell: true is used.
@@ -56,7 +61,7 @@ const child = spawn(process.execPath, [nextBin, ...nextArgs], {
 });
 
 let browserOpened = false;
-const url = `http://${hostname ?? "localhost"}:${port}`;
+const url = `http://${hostname}:${port}`;
 
 child.stdout.on("data", (chunk) => {
   const text = chunk.toString();

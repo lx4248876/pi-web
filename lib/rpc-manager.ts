@@ -320,6 +320,10 @@ export class AgentSessionWrapper {
 			appendMessage?: (msg: {
 				role: string;
 				content: Array<{ type: string; text: string }>;
+				toolCallId?: string;
+				toolName?: string;
+				isError?: boolean;
+				timestamp?: number;
 			}) => string;
 		};
 		const id = `rehydrate:${recovered.toolCallId}`;
@@ -364,9 +368,19 @@ export class AgentSessionWrapper {
 					text = String(answer);
 				}
 				try {
+					// 落成该 toolCall 的 toolResult（与 live 路径 question 工具返回的形态一致）：
+					//  1) 答案持久化；
+					//  2) 「已作答」判定成立，不会重复弹；
+					//  3) 不留悬空 toolCall —— 早前写的是 role:"user"，实测发给模型的 messages
+					//     会变成 assistant(toolCall) > user > user，真实 OpenAI 兼容端点会 400
+					//     （tool_calls must be followed by tool messages）。
 					sessionManager.appendMessage?.({
-						role: "user",
-						content: [{ type: "text", text }],
+						role: "toolResult",
+						toolCallId: recovered.toolCallId,
+						toolName: "question",
+						content: [{ type: "text", text: `User selected: ${text}` }],
+						isError: false,
+						timestamp: Date.now(),
 					});
 				} catch (err) {
 					console.error("[rpc-manager] append recovered answer failed:", err);
@@ -385,15 +399,17 @@ export class AgentSessionWrapper {
 	 * 新增/修改/删除供应商后，运行中的会话不会自动感知。这里重新读取 models.json
 	 * 并重建 provider 注册表，让新模型立即可用。
 	 *
-	 * reloadConfig() 内部 refresh 默认 allowNetwork=true（可能联网拉内置模型目录），
-	 * 实测本环境约 270ms；加 8s 兜底超时，避免离线/受限环境把切模型请求无限挂起。
+	 * pi 1.4.0 删除了 ModelRuntime.reloadConfig()；但 refresh() 在没有 provider
+	 * 过滤时会先 this.config = await ModelConfig.load(modelsPath) 再
+	 * rebuildProviders()，即「重读 models.json + 重建注册表」正是这里要的语义。
+	 * 传 allowNetwork:false 避免顺带联网拉内置模型目录，8s 兜底超时防挂起。
 	 */
 	async reloadModelConfig(): Promise<void> {
 		const runtime = this.inner.modelRuntime;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			await Promise.race([
-				runtime.reloadConfig(),
+				runtime.refresh({ allowNetwork: false }),
 				new Promise<never>((_resolve, reject) => {
 					timer = setTimeout(
 						() =>
@@ -488,7 +504,18 @@ export class AgentSessionWrapper {
 	emit(event: AgentEvent): void {
 		void event; // 事件本体不用于列表通知；见 notifySessionListListeners 的节流逻辑
 		this.notifySessionListListeners();
-		for (const l of this.listeners) l(event);
+		// 逐个监听器隔离：emit 在 pi SDK 的事件回调里同步执行，任何一个 SSE 监听器
+		// 抛错（典型：controller 已关闭后的 enqueue）都会冒泡进 SDK 的 subscribe 回调，
+		// 导致同一次 emit 的后续监听器被跳过、并让每次重连泄漏一个监听器。
+		for (const listener of [...this.listeners]) {
+			try {
+				listener(event);
+			} catch (err) {
+				const index = this.listeners.indexOf(listener);
+				if (index !== -1) this.listeners.splice(index, 1);
+				console.error("[rpc-manager] event listener failed; unsubscribed:", err);
+			}
+		}
 	}
 
 	private createDialogPromise<T>(
@@ -1360,12 +1387,10 @@ export async function startRpcSession(
 			);
 		}
 
-		// When all tools are disabled, clear the system prompt entirely.
-		// pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
-		// the only way to truly clear it is to call agent.setSystemPrompt directly.
-		if (toolNames?.length === 0) {
-			inner.agent.state.systemPrompt = "";
-		}
+		// pi 1.4.0: `agent.state.systemPrompt` is read-only, so the old
+		// "clear the prompt for the Off preset" hack is gone. The Off preset now
+		// only disables every tool (`tools: []` above); pi still sends its base
+		// system prompt, which merely describes an agent without tools.
 
 		// pi-subagents spawns child pi CLI processes. Do NOT set PI_SUBAGENT_PI_BINARY
 		// to a bare cli.js script path: pi-subagents spawns that value directly as an

@@ -1,4 +1,5 @@
 import { onRpcSessionEvent } from "@/lib/rpc-manager";
+import { SseWriter } from "@/lib/sse-writer";
 
 export const dynamic = "force-dynamic";
 
@@ -10,34 +11,26 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const stream = new ReadableStream({
     start(controller) {
-      const encode = (data: unknown) => {
-        const text = `data: ${JSON.stringify(data)}\n\n`;
-        controller.enqueue(new TextEncoder().encode(text));
-      };
+      const writer = new SseWriter(controller);
 
-      encode({ type: "connected" });
+      writer.send({ type: "connected" });
 
       const unsubscribe = onRpcSessionEvent((sessionId, running) => {
-        encode({ type: "session_activity", sessionId, running });
+        writer.send({ type: "session_activity", sessionId, running });
       });
 
       // Heartbeat every 30s to prevent server/proxy timeout (Next.js default ~120-150s)
       const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(new TextEncoder().encode(":\n\n"));
-        } catch {
-          // controller already closed
-        }
+        writer.sendHeartbeat();
       }, 30_000);
 
+      let cleanedUp = false;
       const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         clearInterval(heartbeat);
         unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
+        writer.close();
       };
 
       req.signal?.addEventListener("abort", cleanup);

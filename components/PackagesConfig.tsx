@@ -8,22 +8,16 @@ import { PackageDetail, fmtMatches } from "./packages-config/PackageDetail";
 
 export function PackagesConfig({
   onClose,
-  onInstalled,
 }: {
   onClose: () => void;
-  onInstalled?: () => void;
 }) {
   const [packages, setPackages] = useState<PiPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-  const [installing, setInstalling] = useState<string | null>(null);
-  const [uninstalling, setUninstalling] = useState<string | null>(null);
-  const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
-  const [uninstallErrors, setUninstallErrors] = useState<Record<string, string>>({});
   const [installedPkgs, setInstalledPkgs] = useState<Set<string>>(new Set());
-  const [installedDetails, setInstalledDetails] = useState<Map<string, PiPackage>>(new Map());
+  const [refreshingInstalled, setRefreshingInstalled] = useState(false);
   const [scope, setScope] = useState<"global" | "project">("global");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [tab, setTab] = useState<"market" | "installed">("market");
@@ -103,7 +97,10 @@ export function PackagesConfig({
   }, [query, typeFilter, load]);
 
   // Load installed packages from the local machine (cross-session accurate).
-  const loadInstalled = useCallback(async () => {
+  // Read-only: pi-web never installs/removes packages — that happens in the
+  // terminal (`pi install` / `pi remove`) so it takes effect in pi's own process.
+  const loadInstalled = useCallback(async (manual = false) => {
+    if (manual) setRefreshingInstalled(true);
     try {
       const res = await fetch("/api/packages/list-installed", { cache: "no-store" });
       const d = (await res.json()) as {
@@ -114,75 +111,14 @@ export function PackagesConfig({
       setInstalledPkgs(new Set(d.packages.map((p) => p.name).filter((n): n is string => !!n)));
     } catch {
       // ignore — installed markers just won't show
+    } finally {
+      if (manual) setRefreshingInstalled(false);
     }
   }, []);
 
   useEffect(() => {
     loadInstalled();
   }, [loadInstalled]);
-
-  const install = useCallback(
-    async (pkg: PiPackage) => {
-      setInstalling(pkg.name);
-      setInstallErrors((prev) => ({ ...prev, [pkg.name]: "" }));
-      try {
-        const res = await fetch("/api/packages/install", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ package: pkg.name, scope }),
-        });
-        const d = (await res.json()) as { success?: boolean; error?: string };
-        if (!res.ok || d.error) {
-          setInstallErrors((prev) => ({ ...prev, [pkg.name]: d.error ?? `HTTP ${res.status}` }));
-          return;
-        }
-        setInstalledPkgs((prev) => {
-          const n = new Set(prev);
-          n.add(pkg.name);
-          return n;
-        });
-        setInstalledDetails((prev) => new Map(prev).set(pkg.name, pkg));
-        onInstalled?.();
-      } catch (e) {
-        setInstallErrors((prev) => ({ ...prev, [pkg.name]: String(e) }));
-      } finally {
-        setInstalling(null);
-      }
-    },
-    [scope, onInstalled],
-  );
-
-  const uninstall = useCallback(async (pkg: PiPackage) => {
-    setUninstalling(pkg.name);
-    setUninstallErrors((prev) => ({ ...prev, [pkg.name]: "" }));
-    try {
-      const res = await fetch("/api/packages/remove", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ package: pkg.name, scope }),
-      });
-      const d = (await res.json()) as { success?: boolean; error?: string };
-      if (!res.ok || d.error) {
-        setUninstallErrors((prev) => ({ ...prev, [pkg.name]: d.error ?? `HTTP ${res.status}` }));
-        return;
-      }
-      setInstalledPkgs((prev) => {
-        const n = new Set(prev);
-        n.delete(pkg.name);
-        return n;
-      });
-      setInstalledDetails((prev) => {
-        const n = new Map(prev);
-        n.delete(pkg.name);
-        return n;
-      });
-      onInstalled?.();
-    } catch (e) {
-      setUninstallErrors((prev) => ({ ...prev, [pkg.name]: String(e) }));
-    } finally {
-      setUninstalling(null);
-    }
-  }, [scope, onInstalled]);
 
   const selectedPkg = packages.find((p) => p.name === selected) ?? null;
 
@@ -407,8 +343,24 @@ export function PackagesConfig({
                   </button>
                 ))}
               </div>
-              <span style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 }}>
                 {loading ? "…" : tab === "market" ? `${packages.length} 个` : `${installedPkgs.size} 个`}
+                <button
+                  onClick={() => loadInstalled(true)}
+                  disabled={refreshingInstalled}
+                  title="重新读取本机已安装插件（在终端 pi install 后点这里）"
+                  style={{
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    borderRadius: 3,
+                    border: "1px solid var(--border)",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: refreshingInstalled ? "wait" : "pointer",
+                  }}
+                >
+                  {refreshingInstalled ? "…" : "刷新"}
+                </button>
               </span>
             </div>
 
@@ -423,7 +375,6 @@ export function PackagesConfig({
                   <div style={{ padding: "10px 8px", fontSize: 11, color: "var(--text-dim)" }}>尚未安装任何插件</div>
                 ) : (
                   Array.from(installedPkgs).map((name) => {
-                    const pkg = installedDetails.get(name);
                     const isSelected = selected === name && tab === "installed";
                     return (
                       <div
@@ -462,13 +413,6 @@ export function PackagesConfig({
                             {name}
                           </span>
                         </div>
-                        {pkg?.types?.length ? (
-                          <div style={{ display: "flex", gap: 6, paddingLeft: 12 }}>
-                            {pkg.types.slice(0, 2).map((t) => (
-                              <span key={t} style={{ fontSize: 9, color: "var(--text-dim)" }}>{t}</span>
-                            ))}
-                          </div>
-                        ) : null}
                       </div>
                     );
                   })
@@ -573,30 +517,16 @@ export function PackagesConfig({
                         fontSize: 13,
                       }}
                     >
-                      {installedPkgs.size === 0 ? "尚未安装任何插件" : "选择要管理的插件"}
+                      {installedPkgs.size === 0 ? "尚未安装任何插件" : "选择插件查看安装命令"}
                     </div>
                   );
                 }
                 const pkg =
-                  installedDetails.get(selected) ??
-                  // Pre-existing installs (from `pi list`) may lack marketplace
-                  // detail — synthesize a minimal card so the detail pane works.
+                  packages.find((p) => p.name === selected) ??
+                  // 已安装但市场上没搜到的（`pi list` 里的本地/git 源）：合成一张最小卡片，
+                  // 这样详情面板仍能给出卸载命令。
                   ({ name: selected, description: "", types: [], downloads: 0, date: 0, sortName: selected, searchText: "", install: selected.includes(":") ? selected : `npm:${selected}` } as PiPackage);
-                return (
-                  <PackageDetail
-                    pkg={pkg}
-                    onInstall={() => {}}
-                    installing={false}
-                    installed
-                    installError={null}
-                    onUninstall={() => uninstall(pkg)}
-                    uninstalling={uninstalling === selected}
-                    uninstallError={
-                      uninstallErrors[selected]?.trim() ? uninstallErrors[selected] : null
-                    }
-                    scope={scope}
-                  />
-                );
+                return <PackageDetail key={pkg.name} pkg={pkg} installed scope={scope} />;
               }
 
               if (loading || error || !selectedPkg) {
@@ -620,17 +550,7 @@ export function PackagesConfig({
                 <PackageDetail
                   key={selectedPkg.name}
                   pkg={selectedPkg}
-                  onInstall={() => install(selectedPkg)}
-                  installing={installing === selectedPkg.name}
                   installed={installedPkgs.has(selectedPkg.name)}
-                  installError={
-                    installErrors[selectedPkg.name]?.trim() ? installErrors[selectedPkg.name] : null
-                  }
-                  onUninstall={() => uninstall(selectedPkg)}
-                  uninstalling={uninstalling === selectedPkg.name}
-                  uninstallError={
-                    uninstallErrors[selectedPkg.name]?.trim() ? uninstallErrors[selectedPkg.name] : null
-                  }
                   scope={scope}
                 />
               );

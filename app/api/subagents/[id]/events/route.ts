@@ -1,5 +1,6 @@
 import { resolveSessionPath, getSessionsDir, scanChildSessions } from "@/lib/session-reader";
 import { ChildSessionTailer } from "@/lib/subagent-live";
+import { SseWriter } from "@/lib/sse-writer";
 import { cacheSessionPath } from "@/lib/session-reader";
 
 export const dynamic = "force-dynamic";
@@ -36,11 +37,9 @@ export async function GET(
   // the client interprets child_update / child_terminal / connected.
   const stream = new ReadableStream({
     start(controller) {
-      const encoder = new TextEncoder();
-      const encode = (data: unknown) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      const writer = new SseWriter(controller);
 
-      encode({ type: "connected", sessionId: id });
+      writer.send({ type: "connected", sessionId: id });
 
       let lastRunning: boolean | null = null;
       let stopped = false;
@@ -56,15 +55,15 @@ export async function GET(
           sample = null;
         }
         if (!sample) {
-          encode({ type: "child_error", message: "failed to read subagent session" });
+          writer.send({ type: "child_error", message: "failed to read subagent session" });
           stopped = true;
           clearInterval(timer);
           return;
         }
         if (sample.messages.length > 0) {
-          encode({ type: "child_update", messages: sample.messages, running: sample.running });
+          writer.send({ type: "child_update", messages: sample.messages, running: sample.running });
         } else if (sample.running !== lastRunning) {
-          encode({ type: "child_update", messages: [], running: sample.running });
+          writer.send({ type: "child_update", messages: [], running: sample.running });
         }
         lastRunning = sample.running;
 
@@ -73,27 +72,22 @@ export async function GET(
           // the heartbeat so the client sees it as "done" without reconnecting.
           stopped = true;
           clearInterval(timer);
-          encode({ type: "child_terminal", running: false });
+          writer.send({ type: "child_terminal", running: false });
         }
       }, 1000);
 
       // Heartbeat every 30s to prevent server/proxy timeout.
       const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(":\n\n"));
-        } catch {
-          // already closed
-        }
+        writer.sendHeartbeat();
       }, 30_000);
 
+      let cleanedUp = false;
       const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         clearInterval(timer);
         clearInterval(heartbeat);
-        try {
-          controller.close();
-        } catch {
-          // already closed
-        }
+        writer.close();
       };
 
       (_req as Request).signal?.addEventListener("abort", cleanup);

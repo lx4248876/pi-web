@@ -179,7 +179,7 @@ export function GitPanel({ cwd }: Props) {
 
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [diffData, setDiffData] = useState<{ oldContent: string; newContent: string } | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
+  const [, setDiffLoading] = useState(false);
   const [historicalDiffHash, setHistoricalDiffHash] = useState<string | null>(null);
 
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -227,7 +227,7 @@ export function GitPanel({ cwd }: Props) {
           return next;
         });
       }
-    } catch (err: any) { setError(err?.message || String(err)); setGitState(null); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); setGitState(null); }
     finally { setLoading(false); }
   }, [cwd]);
 
@@ -296,7 +296,7 @@ export function GitPanel({ cwd }: Props) {
     if (!cwd) return;
     setBranchLoading(true);
     try { await api("checkout", { branchName: branch }); showNotification(`已切出分支: ${branch}`); setSelectedBranchForAction(null); await fetchGitStatus(); await fetchBranches(); }
-    catch (err: any) { setError(err.message); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBranchLoading(false); }
   };
 
@@ -308,7 +308,7 @@ export function GitPanel({ cwd }: Props) {
       const data = await api("merge", { targetBranch: branch });
       if (data.conflicted) { setError("存在合并冲突！请在「变更清单」中双击冲突文件进行解决。"); await fetchGitStatus(); }
       else { showNotification(`成功从 "${branch}" 合并！`); setSelectedBranchForAction(null); await fetchGitStatus(); }
-    } catch (err: any) { setError(err?.message || String(err)); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBranchLoading(false); }
   };
 
@@ -317,7 +317,7 @@ export function GitPanel({ cwd }: Props) {
     if (!window.confirm(`确认删除本地分支 "${branch}"？`)) return;
     setBranchLoading(true);
     try { await api("delete-branch", { branchName: branch }); showNotification(`已删除本地分支: ${branch}`); setSelectedBranchForAction(null); await fetchBranches(); }
-    catch (err: any) { setError(err?.message || String(err)); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBranchLoading(false); }
   };
 
@@ -326,15 +326,15 @@ export function GitPanel({ cwd }: Props) {
     if (!newBranchInput.trim() || !cwd) return;
     setBranchLoading(true);
     try { await api("create-branch", { branchName: newBranchInput.trim() }); showNotification(`成功创建并切入新分支: ${newBranchInput}`); setNewBranchInput(""); setIsCreatingBranch(false); await fetchGitStatus(); await fetchBranches(); }
-    catch (err: any) { setError(err?.message || String(err)); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBranchLoading(false); }
   };
 
   /* ─── Git actions ─── */
 
-  const handleFetch = async () => { setFetching(true); try { await api("fetch", {}); showNotification("已同步拉取远程索引"); await fetchGitStatus(); await fetchBranches(); } catch (err: any) { setError(err?.message || String(err)); } finally { setFetching(false); } };
-  const handlePull = async () => { setPulling(true); try { await api("pull", {}); showNotification("拉取完毕，本地工作区已刷新！"); await fetchGitStatus(); } catch (err: any) { setError(err?.message || String(err)); } finally { setPulling(false); } };
-  const handlePush = async (force = false) => { setPushing(true); try { await api("push", { forcePush: force }); showNotification(force ? "强制推送完成！" : "推送成功！"); await fetchGitStatus(); } catch (err: any) { setError(err?.message || String(err)); } finally { setPushing(false); } };
+  const handleFetch = async () => { setFetching(true); try { await api("fetch", {}); showNotification("已同步拉取远程索引"); await fetchGitStatus(); await fetchBranches(); } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); } finally { setFetching(false); } };
+  const handlePull = async () => { setPulling(true); try { await api("pull", {}); showNotification("拉取完毕，本地工作区已刷新！"); await fetchGitStatus(); } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); } finally { setPulling(false); } };
+  const handlePush = async (force = false) => { setPushing(true); try { await api("push", { forcePush: force }); showNotification(force ? "强制推送完成！" : "推送成功！"); await fetchGitStatus(); } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); } finally { setPushing(false); } };
 
   const handleCommit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,7 +343,7 @@ export function GitPanel({ cwd }: Props) {
     if (selectedFiles.length === 0) { alert("请至少勾选一个要保存的文件"); return; }
     setCommiting(true);
     try { await api("commit", { commitMessage }); showNotification(`成功保存提交: "${commitMessage}"`); setCommitMessage(""); setSelectedDiffFile(null); await fetchGitStatus(); }
-    catch (err: any) { setError(err?.message || String(err)); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setCommiting(false); }
   };
 
@@ -353,7 +353,7 @@ export function GitPanel({ cwd }: Props) {
     if (!window.confirm(`确认丢弃这 ${selectedFiles.length} 个文件的所有本地修改吗？`)) return;
     setLoading(true);
     try { await api("rollback", { rollbackFiles: selectedFiles }); showNotification("本地选中的修改已被全部回滚舍弃"); setSelectedDiffFile(null); setCheckedFiles({}); await fetchGitStatus(); }
-    catch (err: any) { setError(err?.message || String(err)); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setLoading(false); }
   };
 
@@ -372,13 +372,13 @@ export function GitPanel({ cwd }: Props) {
 
   const handleConflictResolve = async (filePath: string, mode: "mine" | "theirs") => {
     try { await api("resolve-conflict", { filePath, resolveConflictMode: mode }); showNotification(`冲突解决完毕！已保留${mode === "mine" ? "我的修改" : "对方修改"}`); await triggerDiffView(filePath); await fetchGitStatus(); }
-    catch (err: any) { setError(err.message); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
   const handleRollbackFile = async (filePath: string) => {
     if (!window.confirm(`确认回滚文件 "${filePath}" 到 HEAD 版本？`)) return;
     try { await api("rollback", { rollbackFiles: [filePath] }); showNotification(`已回滚: ${filePath}`); setSelectedDiffFile(null); await fetchGitStatus(); }
-    catch (err: any) { setError(err?.message || String(err)); }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
   const writeFileContent = useCallback(async (filePath: string, content: string) => {
@@ -399,7 +399,7 @@ export function GitPanel({ cwd }: Props) {
       showNotification("已回滚该代码段");
       // Re-fetch diff
       await triggerDiffView(filePath, historicalDiffHash ?? undefined);
-    } catch (err: any) { setError(err?.message || String(err)); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : String(err)); }
   }, [cwd, writeFileContent, historicalDiffHash, showNotification, setError]);
 
   const fetchCommitFiles = useCallback(async (commitHash: string) => {
@@ -853,3 +853,4 @@ export function GitPanel({ cwd }: Props) {
     </div>
   );
 }
+

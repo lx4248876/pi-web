@@ -388,7 +388,7 @@ export function ProjectList({
 												fontStyle: "italic",
 											}}
 										>
-											No active sessions. Click "New" above to start one.
+											No active sessions. Click &quot;New&quot; above to start one.
 										</div>
 									) : (
 										tree.map((node) => (
@@ -422,3 +422,4 @@ export function ProjectList({
 			</div>
   );
 }
+

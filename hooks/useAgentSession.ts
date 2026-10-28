@@ -7,6 +7,7 @@ import { sendAgentCommand } from "@/lib/agent-client";
 import { appendCompletedMessage } from "@/lib/agent-message-merge";
 import { shouldReconnect } from "@/lib/event-channel";
 import { pushPendingDialog, removePendingDialog } from "@/lib/pending-dialogs";
+import { applyExtensionStatus, applyExtensionWidget } from "@/lib/extension-panel-state";
 import type { ToolEntry } from "@/components/ToolPanel";
 
 export type {
@@ -127,6 +128,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		message: string;
 		type?: "info" | "warning" | "error";
 	} | null>(null);
+	// pi 扩展的持久状态通道：ctx.ui.setStatus(key, text) / setWidget(key, lines)。
+	// 空字符串 / 空数组表示扩展撤掉该 key（pi 的语义），所以这里用「删除」而非存空值。
+	const [extensionStatuses, setExtensionStatuses] = useState<Record<string, string>>({});
+	const [extensionWidgets, setExtensionWidgets] = useState<Record<string, string[]>>({});
 
 	const eventSourceRef = useRef<EventSource | null>(null);
 	// Read-only live follow of a subagent child session (separate SSE from the parent stream).
@@ -628,6 +633,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 					}
 					if (request.method === "set_editor_text") {
 						opts.chatInputRef?.current?.insertIfEmpty(request.text);
+						break;
+					}
+					if (request.method === "setStatus") {
+						const { statusKey, statusText } = request;
+						setExtensionStatuses((prev) => applyExtensionStatus(prev, statusKey, statusText));
+						break;
+					}
+					if (request.method === "setWidget") {
+						const { widgetKey, widgetLines } = request;
+						setExtensionWidgets((prev) => applyExtensionWidget(prev, widgetKey, widgetLines));
 						break;
 					}
 					if (request.method === "setTitle" && request.title) {
@@ -1329,6 +1344,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 		loopWarning,
 		pendingUiRequests,
 		uiNotice,
+		extensionStatuses,
+		extensionWidgets,
 		// Refs
 		sessionIdRef,
 		eventSourceRef,

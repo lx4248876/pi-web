@@ -156,14 +156,17 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
     return () => clearTimeout(t);
   }, [messages.length, updatePositions]);
 
-  const scrollToMinimapRatio = useCallback((viewportTopRatio: number) => {
+  // 不进 useCallback：函数体读 scrollContainer.current，手工依赖表无法与 React
+  // Compiler 的推断一致（会触发 preserve-manual-memoization），而这里每次渲染重建
+  // 的成本可忽略。
+  const scrollToMinimapRatio = (viewportTopRatio: number) => {
     const el = scrollContainer.current;
     if (!el) return;
     const scrollable = el.scrollHeight - el.clientHeight;
     if (scrollable <= 0) return;
     const clamped = Math.max(0, Math.min(1 - viewportRatio, viewportTopRatio));
     el.scrollTop = (clamped / (1 - viewportRatio)) * scrollable;
-  }, [scrollContainer, viewportRatio]);
+  };
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!visible) return;

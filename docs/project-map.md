@@ -2,19 +2,19 @@
 
 ## 元信息
 - base_ref: 4b9c0c8
-- 更新说明: 全量重扫重写（本轮「大文件拆分」重构：SessionSidebar 3623→984 拆出 `components/session-sidebar/`；其余 8 个 >1000 行文件全部拆至子目录；`lib/` 新增 `clipboard.ts`/`agent-session-types.ts`/`rpc-pending-dialogs.ts`/`rpc-session-events.ts`；`hashline-tool.ts` 删除死导出；browse 目录类型上移 `lib/cwd-selection.ts`）。
+- 更新说明: 「A 定位（轻量外壳）」清理轮：整链删除 hashline / safe-edit 两个演示能力（含 2 个页面、2 个 API、4 个 lib/hook、5 篇文档）、删除 `@oh-my-pi/hashline` 与零引用的 `@modelcontextprotocol/sdk`、插件面板降级为只读（删 install/remove/translate-desc 三路由）、新增 `docs/capability-boundaries.md` 否决清单；同时清掉全库既有 lint 错误（25 → 0）。
 
 ## 目录职责
 | 路径 | 一句话职责 |
 |------|------------|
-| `app/` | Next.js App Router：主聊天页 `page.tsx`（挂 AppShell）、两个演示页 (`hashline-demo`/`safe-edit-demo`)、`layout.tsx`/`globals.css`，以及 `app/api/**` 全部服务端路由 |
+| `app/` | Next.js App Router：主聊天页 `page.tsx`（挂 AppShell）、`layout.tsx`/`globals.css`，以及 `app/api/**` 全部服务端路由（能力边界见 `docs/capability-boundaries.md`） |
 | `components/` | React UI 组件；根目录为各主面板（SessionSidebar/ChatWindow/ChatInput/MessageView/FileViewer/…），**子目录 = 大文件拆分产物**：`session-sidebar/`（8 文件）、`chat-input/`（5+1）、`chat-window/`（ExtensionUIDialog）、`file-viewer/`（4+1）、`message-view/`（blocks）、`models-config/`（8）、`packages-config/`（PackageDetail）；另有 `app-shell/`（TopBar/SidebarPanel/RightPanel/EmptyState/useResizablePanel/useModalRect） |
-| `hooks/` | React hooks：`useAgentSession`（会话主 hook）、`usePendingSessionIds`（待答徽标轮询）、`useTheme`、`useSafeEdit`、`useHashline`、`useAudio`、`useDragDrop` |
+| `hooks/` | React hooks：`useAgentSession`（会话主 hook）、`usePendingSessionIds`（待答徽标轮询）、`useTheme`、`useAudio`、`useDragDrop` |
 | `lib/` | 纯逻辑/后端助手：`rpc-manager.ts`（会话心脏，含 AgentSessionWrapper）、`rpc-session-events.ts`（SSE 事件注册）、`rpc-pending-dialogs.ts`（未答弹窗权威扫描）、`agent-session-types.ts`（会话纯类型）、`session-reader.ts`、`pending-dialogs.ts`（前端缓冲）、`recent-cwds.ts`/`cwd-selection.ts`/`project-session-restore.ts`（cwd 链路）、`clipboard.ts`（copyText 去重）、`file-paths.ts`（路径规范化）、`compaction-override.ts`（压缩阈值换算）、`sidebar-width.ts`/`ui-state.ts`（UI 持久化）等 |
 | `tests/` | 测试（`.mjs` 原生 + `.ts` 经 jiti）；覆盖会话状态恢复/死锁/待答重建等核心门禁 |
 | `docs/` | 文档：本图 + `adr/`（架构决策）+ `specs/`（需求 Code Map）+ `change-explainers/`（修复讲解）等 |
 | `bin/` | `pi-web` CLI 入口（发布 `bin/pi-web.js`） |
-| `patches/` | patch-package 补丁（`@earendil-works/pi-ai` / `pi-coding-agent` 0.81.1） |
+| `patches/` | patch-package 补丁目录（当前为空：0.81.1 时代两个补丁随 pi 1.4.0 升级清理，见 `docs/audit-report-2026-10.md`） |
 | `debug/` | 调试产物目录（gitignore，不入库） |
 | `public/` | 静态资源（svg 图标等） |
 
@@ -22,7 +22,7 @@
 - 开发服务器：`npm run dev`（Next.js 端口 3030）
 - 测试：`npm test`（`.mjs` 原生 + `.ts` 经 `node --import jiti/register`）；单测 `npm run test:one`
 - 类型检查：`node_modules/.bin/tsc --noEmit`；Lint：`npm run lint`
-- 安装补丁：`postinstall: patch-package`（应用 `patches/`）
+- 安装补丁：`postinstall: patch-package`（应用 `patches/`；当前目录为空，脚本只打印 “No patch files found”）
 - 会话/约定：`AGENTS.md`（每轮加载，含关键机器门禁）
 
 ## 关键链路
@@ -34,9 +34,7 @@
 | Git panel | `/api/git-status` | `components/GitPanel.tsx`、`components/app-shell/` | 仓库状态/提交/回滚；`quotePath=false` 解析(AGENTS 门禁) |
 | 模型/Auth | `/api/models`、`/api/models-config`、`/api/auth/*`、`/api/test-connection` | pi-ai `ModelRuntime`、`lib/models-config-test-connection.ts`、`lib/model-error.ts`、`lib/api-key-guard.ts`、`components/models-config/` | 凭证/模型编排；api-key 保存先过脏值校验 |
 | 文件/产物查看 | `/api/files/**`、`/api/artifacts/**`、`/api/blobs/[hash]` | `components/file-viewer/`（DiffView/ImageViewer/AudioViewer/useFileWatch）、`ArtifactDiffViewer.tsx`、`PremiumDiffViewer.tsx`、`ArtifactStrip.tsx`、`TabBar.tsx`、`lib/html-preview-theme.ts` | 读盘/产物并行 diff/预览；SSE 实时刷新收敛为 useFileWatch |
-| 技能/扩展管理 | `/api/skills(**/search,install)`、`/api/packages/**` | `components/SkillsConfig.tsx`、`PackagesConfig.tsx`+`packages-config/`、`lib/skills-cache.ts`、`lib/pi-packages.ts`、`lib/npx.ts`、`lib/pi-exec.ts`、`lib/subagent-live.ts` | 技能检索/安装、包管理、子代理事件 |
-| Hashline 演示 | `app/hashline-demo/page.tsx`、`/api/hashline` | `components/HashlineDemo.tsx`、`hooks/useHashline.ts`、`lib/hashline-client.ts`、`lib/hashline-tool.ts`(仅客户端函数) | 演示 @oh-my-pi/hashline 集成 |
-| Safe-edit 演示 | `app/safe-edit-demo/page.tsx`、`/api/safe-edit` | `components/SafeEditDemo.tsx`、`hooks/useSafeEdit.ts`、`lib/safe-edit-guard.ts` | 演示用法/边界校验 |
+| 技能/扩展管理 | `/api/skills(**/search,install)`、`/api/packages`（市场）、`/api/packages/list-installed` | `components/SkillsConfig.tsx`、`PackagesConfig.tsx`+`packages-config/`、`lib/skills-cache.ts`、`lib/pi-packages.ts`、`lib/npx.ts`、`lib/pi-exec.ts`、`lib/subagent-live.ts` | 技能检索/安装、**插件市场只读**（安装改终端 `pi install`）、子代理只读事件 |
 | CWD/启动恢复 | `app/page.tsx` 初始化、`/api/browse-dirs`、`/api/default-cwd` | `lib/recent-cwds.ts`、`lib/cwd-selection.ts`(含 BrowseDir 类型)、`lib/project-session-restore.ts`、`components/app-shell/SidebarPanel.tsx`、`components/session-sidebar/BrowseDialog.tsx` | 最近 cwd/目录选择/上次会话恢复 |
 | 系统操作 | `/api/home`、`/api/open-folder`、`/api/open-terminal`、`/api/ui-state` | `components/app-shell/TopBar.tsx`、`lib/ui-state.ts` | 打开工作区/终端/UI 状态持久化 |
 
@@ -120,12 +118,12 @@
 - 入口: `/api/skills`、`/api/skills/search`、`/api/skills/install`、`/api/packages/**`、`/api/subagents/[id]/events`
 - 关键文件:
   - `lib/skills-cache.ts` · 技能列表缓存
-  - `lib/pi-packages.ts` · pi 包元数据（解析/筛选/排序）
-  - `lib/npx.ts` · npx 调用（检索/安装）
+  - `lib/pi-packages.ts` · pi 包市场抓取 + 本机已安装列表解析（**只读**）
+  - `lib/npx.ts` · npx 调用（技能检索/安装）
   - `lib/pi-exec.ts` · 执行 pi / npx 命令封装
-  - `lib/subagent-live.ts` · 子代理实时事件流
+  - `lib/subagent-live.ts` · 子代理只读实时事件流
   - `components/SkillsConfig.tsx` · 技能配置 UI
-  - `components/PackagesConfig.tsx` · 包管理 UI + `components/packages-config/PackageDetail.tsx`
+  - `components/PackagesConfig.tsx` · 插件市场/已安装列表 UI（只读 + 可复制安装命令）+ `components/packages-config/PackageDetail.tsx`
   - `components/SkillMenu.tsx` · @技能快速选择菜单（ChatInput 内）
 
 ### CWD/启动恢复
@@ -148,6 +146,6 @@
 
 ## 未覆盖/缺口
 - `components/` 根部非主链路 UI（ChatMinimap/TodoPanel/ToolPanel/BranchNavigator/AtMentionMenu/FileIcons/FileExplorer 细节）只到目录级职责，未逐文件展开。
-- `app/api/hashline`、`app/api/safe-edit` 为实现只为演示链路，未对内做文件级展开。
-- `app/api/packages/*` 各子路由（install/list-installed/remove/translate-desc）未逐一展开（同为技能/扩展链路，逻辑在 `lib/pi-packages.ts`）。
+- `app/api/hashline`、`app/api/safe-edit` 已在「A 定位」清理中整链删除（见 `docs/capability-boundaries.md`）。
+- `app/api/packages/install|remove|translate-desc` 同批删除；现仅保留 `/api/packages`（市场）与 `/api/packages/list-installed`（只读）。
 - `components/chat-input/` 内部各子件（ModelDropdown/ToolPresetDropdown/ContextUsageBar/AttachedImagesStrip/SessionStatsBar/constants）未逐一列（会话执行链路内子件，可查 `components/chat-input/`）。

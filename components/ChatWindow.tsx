@@ -180,6 +180,8 @@ export function ChatWindow({
         loopWarning,
         pendingUiRequests,
         uiNotice,
+        extensionStatuses,
+        extensionWidgets,
         messagesEndRef,
         scrollContainerRef,
         lastUserMsgRef,
@@ -824,6 +826,31 @@ export function ChatWindow({
                     </div>
 
                     <div className="relative">
+                        {/* 扩展状态条：ctx.ui.setStatus(key, text) 的真实出口。
+                            text 为空即扩展撤掉该 key（hook 里已按删除处理）。 */}
+                        {Object.keys(extensionStatuses).length > 0 && (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-(--border) px-4 py-1.5 text-xs text-(--text-dim)">
+                                {Object.entries(extensionStatuses).map(([key, text]) => (
+                                    <span key={key} className="inline-flex items-center gap-1">
+                                        <span className="opacity-60">{key}</span>
+                                        <span className="text-(--text-muted)">{text}</span>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        {/* 扩展小组件：ctx.ui.setWidget(key, lines) 的真实出口（按 key 顺序堆叠）。 */}
+                        {Object.keys(extensionWidgets).length > 0 && (
+                            <div className="border-t border-(--border) px-4 py-2">
+                                {Object.entries(extensionWidgets).map(([key, lines]) => (
+                                    <pre
+                                        key={key}
+                                        className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-(--text-muted)"
+                                    >
+                                        {lines.join("\n")}
+                                    </pre>
+                                ))}
+                            </div>
+                        )}
                         {loopWarning && (
                             <div
                                 className={`flex items-center gap-3 px-4 py-2.5 text-sm transition-all ${
